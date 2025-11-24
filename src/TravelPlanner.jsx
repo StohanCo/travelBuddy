@@ -25,6 +25,60 @@ const fixImageLink = (url) => {
   return newUrl;
 };
 
+// --- Helper: Color Styles based on Type ---
+const getTypeStyles = (type) => {
+  if (!type) return {
+    border: 'border-l-4 border-l-transparent',
+    badge: 'bg-slate-100 text-slate-500 border-slate-200',
+    number: 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white'
+  };
+
+  const t = type.toLowerCase().trim();
+
+  // FOOD (Orange)
+  if (['food', 'restaurant', 'cafe', 'dinner', 'lunch', 'breakfast', 'bar', 'snack'].some(x => t.includes(x))) {
+    return {
+      border: 'border-l-4 border-l-orange-400',
+      badge: 'bg-orange-100 text-orange-800 border-orange-200',
+      number: 'bg-orange-100 text-orange-600 group-hover:bg-orange-500 group-hover:text-white'
+    };
+  }
+
+  // HOTEL (Indigo)
+  if (['hotel', 'stay', 'accommodation', 'airbnb', 'motel', 'hostel'].some(x => t.includes(x))) {
+    return {
+      border: 'border-l-4 border-l-indigo-400',
+      badge: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+      number: 'bg-indigo-100 text-indigo-600 group-hover:bg-indigo-500 group-hover:text-white'
+    };
+  }
+
+  // SIGHT / NATURE (Emerald)
+  if (['sight', 'view', 'park', 'nature', 'hike', 'beach', 'garden'].some(x => t.includes(x))) {
+    return {
+      border: 'border-l-4 border-l-emerald-400',
+      badge: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+      number: 'bg-emerald-100 text-emerald-600 group-hover:bg-emerald-500 group-hover:text-white'
+    };
+  }
+
+  // ATTRACTION (Rose)
+  if (['attraction', 'museum', 'activity', 'tour', 'fun', 'landmark'].some(x => t.includes(x))) {
+    return {
+      border: 'border-l-4 border-l-rose-400',
+      badge: 'bg-rose-100 text-rose-800 border-rose-200',
+      number: 'bg-rose-100 text-rose-600 group-hover:bg-rose-500 group-hover:text-white'
+    };
+  }
+
+  // Default
+  return {
+    border: 'border-l-4 border-l-slate-300',
+    badge: 'bg-slate-100 text-slate-600 border-slate-200',
+    number: 'bg-slate-100 text-slate-600 group-hover:bg-slate-500 group-hover:text-white'
+  };
+};
+
 // --- Helper: Robust HTML Table Parser ---
 const parseHTML = (htmlText) => {
   const parser = new DOMParser();
@@ -181,8 +235,6 @@ export default function TravelApp() {
       const savedUrl = localStorage.getItem('travel_sheet_url');
       if (savedUrl) {
         setSheetUrl(savedUrl);
-        // Load visited state specific to this sheet if possible, currently using a simple key
-        // Ideally we hash the URL, but using the raw URL as part of key is fine for simple usage
         const savedVisited = localStorage.getItem(`visited_${savedUrl}`);
         if (savedVisited) setVisited(JSON.parse(savedVisited));
       }
@@ -326,7 +378,7 @@ export default function TravelApp() {
         const link = mapIdx.link > -1 ? row[mapIdx.link] : '';
         const name = mapIdx.name > -1 ? row[mapIdx.name] : '';
         
-        // Detect Header: Name exists, but Link is missing or very short
+        // Detect Header
         const isHeader = name && (!link || link.length < 5);
 
         const extractedLoc = extractLocationData(link);
@@ -368,7 +420,6 @@ export default function TravelApp() {
       setAppState('VIEW');
       localStorage.setItem('travel_sheet_url', urlToFetch);
       
-      // Load saved visited items
       const savedVisited = localStorage.getItem(`visited_${urlToFetch}`);
       if (savedVisited) setVisited(JSON.parse(savedVisited));
 
@@ -422,10 +473,9 @@ export default function TravelApp() {
     );
   };
   
-  // Filter logic
   const displayedItems = items.filter(item => {
     if (activeFilter === 'All') return true;
-    if (item.isHeader) return false; // Hide headers when filtering specific category
+    if (item.isHeader) return false;
     return item.type === activeFilter;
   });
 
@@ -565,7 +615,11 @@ export default function TravelApp() {
           </div>
         )}
         
-        {displayedItems.map((item, idx) => (
+        {displayedItems.map((item, idx) => {
+          // Get specific styles for this item type
+          const styles = getTypeStyles(item.type);
+          
+          return (
           <React.Fragment key={idx}>
             {/* Section Header */}
             {item.isHeader ? (
@@ -590,9 +644,11 @@ export default function TravelApp() {
                     </div>
                     )}
                     
-                    {/* Main Card */}
+                    {/* Main Card with Dynamic Border Color */}
                     <div 
                     className={`group relative bg-white rounded-xl shadow-sm hover:shadow-md border transition-all duration-200 overflow-hidden cursor-pointer z-20 mb-4 ${
+                        styles.border
+                    } ${
                         visited[item.id] ? 'opacity-60 border-slate-100 bg-slate-50' : 'border-slate-100'
                     }`}
                     onMouseEnter={() => setHoveredItem(item)}
@@ -622,8 +678,9 @@ export default function TravelApp() {
                             />
                             </div>
                         ) : (
+                            // Dynamic Number Circle Color
                             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg transition-colors ${
-                                visited[item.id] ? 'bg-slate-200 text-slate-400' : 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white'
+                                visited[item.id] ? 'bg-slate-200 text-slate-400' : styles.number
                             }`}>
                             {idx + 1}
                             </div>
@@ -637,8 +694,9 @@ export default function TravelApp() {
                                 }`}>
                                     {item.name}
                                 </h3>
+                                {/* Dynamic Type Badge */}
                                 {item.type && (
-                                    <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">
+                                    <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${styles.badge}`}>
                                         {item.type}
                                     </span>
                                 )}
@@ -686,7 +744,7 @@ export default function TravelApp() {
                 </div>
             )}
           </React.Fragment>
-        ))}
+        )})}
         
         {items.length > 0 && <div className="text-center pt-8 text-slate-400 text-sm">End of Itinerary</div>}
       </main>
