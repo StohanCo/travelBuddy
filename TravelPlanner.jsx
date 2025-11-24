@@ -1,0 +1,642 @@
+import React, { useState, useEffect } from 'react';
+import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings } from 'lucide-react';
+
+// --- Helper: Smart Image Link Fixer ---
+const fixImageLink = (url) => {
+  if (!url || typeof url !== 'string') return '';
+  let newUrl = url.trim();
+
+  // Fix Google Drive Links
+  if (newUrl.includes('drive.google.com')) {
+    const idMatch = newUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+    if (idMatch && idMatch[1]) {
+      return `https://drive.google.com/uc?export=view&id=${idMatch[1]}`;
+    }
+    const idParamMatch = newUrl.match(/id=([a-zA-Z0-9-_]+)/);
+    if (idParamMatch && idParamMatch[1]) {
+      return `https://drive.google.com/uc?export=view&id=${idParamMatch[1]}`;
+    }
+  }
+  
+  if (newUrl.includes('photos.app.goo.gl')) {
+    return newUrl;
+  }
+
+  return newUrl;
+};
+
+// --- Helper: Robust HTML Table Parser ---
+const parseHTML = (htmlText) => {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(htmlText, 'text/html');
+  
+  // 1. Try Google Sheets standard class first
+  let table = doc.querySelector('.waffle');
+  
+  // 2. If not found, look for any table and pick the one with the most rows
+  if (!table) {
+    const allTables = Array.from(doc.querySelectorAll('table'));
+    if (allTables.length > 0) {
+      table = allTables.reduce((prev, current) => {
+        return (prev.querySelectorAll('tr').length > current.querySelectorAll('tr').length) ? prev : current;
+      });
+    }
+  }
+
+  if (!table) return { headers: [], rows: [] };
+
+  // Get all rows
+  let rawRows = Array.from(table.querySelectorAll('tr'));
+  
+  // Filter rows: Must have at least one cell (td/th) and some content (text or image)
+  let rows = rawRows.filter(r => {
+     const cells = r.querySelectorAll('td, th');
+     if (cells.length === 0) return false;
+     
+     // Check for content
+     const hasText = r.innerText.trim().length > 0;
+     const hasImg = r.querySelector('img') !== null;
+     const hasBgImg = r.innerHTML.includes('background-image');
+     
+     return hasText || hasImg || hasBgImg;
+  });
+
+  if (rows.length < 2) return { headers: [], rows: [] };
+
+  // Assume first row is header
+  const headerCells = Array.from(rows[0].querySelectorAll('td, th'));
+  const headers = headerCells.map(cell => cell.innerText.toLowerCase().trim());
+
+  const data = [];
+  
+  // Process data rows
+  for (let i = 1; i < rows.length; i++) {
+    const cells = Array.from(rows[i].querySelectorAll('td, th'));
+    
+    // Pad cells if missing to match header length
+    while (cells.length < headers.length) cells.push({ innerText: '', querySelector: () => null, getAttribute: () => '' });
+    
+    const rowData = {};
+    headers.forEach((header, index) => {
+      const cell = cells[index];
+      if (!cell) return;
+
+      // 1. Try finding explicit img tag
+      const imgTag = cell.querySelector('img');
+      
+      // 2. Try finding background image in style (common in Google Sheets)
+      const style = cell.getAttribute('style') || '';
+      const bgMatch = style.match(/background-image:\s*url\(['"]?(.*?)['"]?\)/);
+
+      if (imgTag) {
+        rowData[index] = imgTag.src; 
+      } else if (bgMatch && bgMatch[1]) {
+        rowData[index] = bgMatch[1];
+      } else {
+        rowData[index] = cell.innerText.trim(); 
+      }
+    });
+    data.push(Object.values(rowData));
+  }
+  
+  return { headers, rows: data };
+};
+
+// --- Helper: CSV Parser ---
+const parseCSV = (text) => {
+  if (!text || typeof text !== 'string') return { headers: [], rows: [] };
+  
+  const rows = [];
+  let currentRow = [];
+  let currentCell = '';
+  let insideQuotes = false;
+  const cleanText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  for (let i = 0; i < cleanText.length; i++) {
+    const char = cleanText[i];
+    const nextChar = cleanText[i + 1];
+
+    if (char === '"') {
+      if (insideQuotes && nextChar === '"') {
+        currentCell += '"';
+        i++;
+      } else {
+        insideQuotes = !insideQuotes;
+      }
+    } else if (char === ',' && !insideQuotes) {
+      currentRow.push(currentCell.trim());
+      currentCell = '';
+    } else if (char === '\n' && !insideQuotes) {
+      if (currentCell || currentRow.length > 0) {
+        currentRow.push(currentCell.trim());
+        rows.push(currentRow);
+        currentRow = [];
+        currentCell = '';
+      }
+    } else {
+      currentCell += char;
+    }
+  }
+  if (currentCell || currentRow.length > 0) {
+    currentRow.push(currentCell.trim());
+    rows.push(currentRow);
+  }
+
+  if (rows.length === 0) return { headers: [], rows: [] };
+  const headers = rows[0].map(h => h.toLowerCase().trim());
+  return { headers, rows: rows.slice(1) };
+};
+
+// --- Helper: Location Data ---
+const extractLocationData = (url) => {
+  if (!url || typeof url !== 'string') return null;
+  const coordsRegex = /@(-?\d+\.\d+),(-?\d+\.\d+)/;
+  const searchRegex = /search\/(-?\d+\.\d+),\+?(-?\d+\.\d+)/;
+  let lat = null, lng = null;
+
+  const coordsMatch = url.match(coordsRegex);
+  if (coordsMatch) { lat = coordsMatch[1]; lng = coordsMatch[2]; }
+  else {
+    const searchMatch = url.match(searchRegex);
+    if (searchMatch) { lat = searchMatch[1]; lng = searchMatch[2]; }
+  }
+
+  if (lat && lng) return { lat, lng };
+  return null;
+};
+
+export default function TravelApp() {
+  const [sheetUrl, setSheetUrl] = useState('');
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [debugLog, setDebugLog] = useState(''); 
+  const [appState, setAppState] = useState('SETUP');
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [hoveredItem, setHoveredItem] = useState(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlFromParam = params.get('sheet');
+    if (urlFromParam) {
+      setSheetUrl(urlFromParam);
+      fetchData(urlFromParam);
+    } else {
+      const savedUrl = localStorage.getItem('travel_sheet_url');
+      if (savedUrl) setSheetUrl(savedUrl);
+    }
+  }, []);
+
+  const handleMouseMove = (e) => setMousePos({ x: e.clientX, y: e.clientY });
+
+  const copyShareLink = () => {
+    const baseUrl = window.location.href.split('?')[0];
+    const shareUrl = `${baseUrl}?sheet=${encodeURIComponent(sheetUrl)}`;
+    navigator.clipboard.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const processUrl = (url, forceCSV = false) => {
+    if (!url) return '';
+    let cleanUrl = url.trim();
+    
+    if (forceCSV) {
+       if (cleanUrl.includes('/pubhtml')) {
+          return cleanUrl.replace('/pubhtml', '/export?format=csv');
+       }
+       if (cleanUrl.includes('/edit') || cleanUrl.includes('/d/')) {
+          return cleanUrl.replace(/\/edit.*$/, '/export?format=csv');
+       }
+    }
+
+    if (cleanUrl.includes('output=csv') || cleanUrl.includes('format=csv')) return cleanUrl;
+
+    if (cleanUrl.includes('/edit')) {
+        return cleanUrl.replace(/\/edit.*$/, '/export?format=csv');
+    }
+    
+    if (cleanUrl.includes('/pubhtml')) {
+        if (!cleanUrl.includes('single=')) {
+           cleanUrl += (cleanUrl.includes('?') ? '&' : '?') + 'gid=0&single=true';
+        }
+        return cleanUrl;
+    }
+    
+    return cleanUrl;
+  };
+
+  const fetchWithProxy = async (url) => {
+    try {
+      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+      const response = await fetch(proxyUrl);
+      if (response.ok) return { text: await response.text(), source: 'corsproxy' };
+    } catch (e) { console.warn("CorsProxy failed", e); }
+
+    const proxyUrl2 = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}&t=${Date.now()}`;
+    const response = await fetch(proxyUrl2);
+    if (!response.ok) throw new Error(`Proxy Fetch Failed: ${response.status}`);
+    return { text: await response.text(), source: 'allorigins' };
+  };
+
+  const fetchData = async (urlToFetch, forceCSV = false) => {
+    setLoading(true);
+    setError(null);
+    setDebugLog('');
+    
+    const processedUrl = processUrl(urlToFetch, forceCSV);
+    setDebugLog(prev => prev + `Requesting: ${processedUrl}\n`);
+
+    try {
+      let text = '';
+      let isHTML = false;
+
+      try {
+        const response = await fetch(processedUrl);
+        if (response.ok) {
+          text = await response.text();
+          setDebugLog(prev => prev + `Method: Direct Fetch (Success)\n`);
+        } else {
+          throw new Error('Direct fetch blocked');
+        }
+      } catch (directErr) {
+        try {
+          const result = await fetchWithProxy(processedUrl);
+          text = result.text;
+          setDebugLog(prev => prev + `Method: Proxy (${result.source})\n`);
+        } catch (proxyErr) {
+          throw new Error('Connection failed. Google Sheets refused connection to both direct and proxy methods.');
+        }
+      }
+
+      setDebugLog(prev => prev + `Response Length: ${text.length} chars\n`);
+      
+      if (text.trim().toLowerCase().startsWith('<!doctype html') || text.includes('<html')) {
+        isHTML = true;
+      }
+
+      let headers = [];
+      let rawRows = [];
+
+      if (isHTML) {
+        if (forceCSV) {
+             throw new Error('Received HTML but expected CSV. The link might be a "Page" link not a "File" link.');
+        }
+        const result = parseHTML(text);
+        headers = result?.headers || [];
+        rawRows = result?.rows || [];
+        setDebugLog(prev => prev + `Parsed HTML: Found ${headers.length} headers and ${rawRows.length} rows.\n`);
+      } else {
+        const result = parseCSV(text);
+        headers = result?.headers || [];
+        rawRows = result?.rows || [];
+        setDebugLog(prev => prev + `Parsed CSV: Found ${headers.length} headers and ${rawRows.length} rows.\n`);
+      }
+
+      if (!headers || headers.length === 0) {
+         throw new Error(`Connected successfully, but found no data rows. (${isHTML ? 'HTML Mode' : 'CSV Mode'})`);
+      }
+
+      const mapIdx = {
+        name: headers.findIndex(h => h.includes('name') || h.includes('place') || h.includes('location')),
+        link: headers.findIndex(h => h.includes('link') || h.includes('map') || h.includes('url')),
+        short: headers.findIndex(h => h.includes('short') || h.includes('hover') || h.includes('summary')),
+        details: headers.findIndex(h => h.includes('detail') || h.includes('desc') || h.includes('info')),
+        photo: headers.findIndex(h => h.includes('photo') || h.includes('img') || h.includes('pic'))
+      };
+
+      if (mapIdx.name === -1 && mapIdx.link === -1) {
+        throw new Error(`Could not find "Name" or "Maps Link" columns. Found headers: [${headers.join(', ')}]`);
+      }
+
+      const parsedItems = rawRows.map((row, idx) => {
+        const link = mapIdx.link > -1 ? row[mapIdx.link] : '';
+        const extractedLoc = extractLocationData(link);
+        
+        let displayName = mapIdx.name > -1 ? row[mapIdx.name] : '';
+        // Clean up name if it has HTML in it
+        if (displayName && displayName.includes('<')) {
+           const tempDiv = document.createElement('div');
+           tempDiv.innerHTML = displayName;
+           displayName = tempDiv.innerText;
+        }
+
+        if (!displayName && extractedLoc) displayName = `Location ${idx + 1}`;
+        else if (!displayName) displayName = "Unnamed Location";
+
+        let photoUrl = mapIdx.photo > -1 ? row[mapIdx.photo] : '';
+        if (photoUrl) photoUrl = fixImageLink(photoUrl);
+
+        return {
+          id: idx,
+          name: displayName,
+          mapLink: link,
+          shortInfo: mapIdx.short > -1 ? row[mapIdx.short] : '',
+          details: mapIdx.details > -1 ? row[mapIdx.details] : '',
+          photo: photoUrl,
+          coords: extractedLoc
+        };
+      }).filter(item => item.mapLink && item.mapLink.length > 5); 
+
+      if (parsedItems.length === 0) throw new Error('No valid locations found. Check that the "Maps Link" column has valid Google Maps URLs.');
+
+      setItems(parsedItems);
+      setAppState('VIEW');
+      localStorage.setItem('travel_sheet_url', urlToFetch);
+    } catch (err) {
+      console.error(err);
+      setError(err.message);
+      setAppState('SETUP');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReset = () => {
+    localStorage.removeItem('travel_sheet_url');
+    const url = new URL(window.location);
+    url.searchParams.delete('sheet');
+    window.history.pushState({}, '', url);
+    setSheetUrl('');
+    setItems([]);
+    setAppState('SETUP');
+  };
+
+  const HoverCard = () => {
+    if (!hoveredItem) return null;
+    const hasPhoto = hoveredItem.photo && hoveredItem.photo.length > 5;
+    if (!hasPhoto) return null;
+
+    const isRightSide = mousePos.x > window.innerWidth / 2;
+    const isBottomSide = mousePos.y > window.innerHeight / 2;
+
+    const style = {
+      top: mousePos.y + (isBottomSide ? -20 : 20),
+      left: mousePos.x + (isRightSide ? -20 : 20),
+      transform: `translate(${isRightSide ? '-100%' : '0'}, ${isBottomSide ? '-100%' : '0'})`
+    };
+
+    return (
+      <div 
+        className="fixed z-50 pointer-events-none p-2 bg-white rounded-lg shadow-xl border border-gray-200 w-48 animate-in fade-in zoom-in duration-200"
+        style={style}
+      >
+        <div className="w-full h-32 overflow-hidden rounded bg-gray-100 relative">
+            <img 
+              src={hoveredItem.photo} 
+              alt={hoveredItem.name}
+              className="w-full h-full object-cover"
+              onError={(e) => e.target.style.display = 'none'}
+            />
+        </div>
+      </div>
+    );
+  };
+
+  if (appState === 'SETUP') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 font-sans">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
+          <div className="flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-6 mx-auto text-blue-600">
+            <MapPin size={32} />
+          </div>
+          <h1 className="text-2xl font-bold text-center text-slate-800 mb-2">Trip Planner</h1>
+          <p className="text-slate-500 text-center mb-8">Connect your Google Sheet to start your journey.</p>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Google Sheet Link</label>
+              <input
+                type="text"
+                placeholder="https://docs.google.com/spreadsheets/..."
+                className="w-full px-4 py-3 rounded-lg border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+                value={sheetUrl}
+                onChange={(e) => setSheetUrl(e.target.value)}
+              />
+            </div>
+
+            <button
+              onClick={() => fetchData(sheetUrl, false)}
+              disabled={loading || !sheetUrl}
+              className="w-full py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="animate-spin w-5 h-5" />
+                  <span>Loading Data...</span>
+                </>
+              ) : 'Load Trip'}
+            </button>
+
+            {error && (
+              <div className="p-4 bg-red-50 text-red-700 text-sm rounded-lg flex flex-col gap-2 border border-red-100">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="shrink-0 w-5 h-5" />
+                  <span className="font-bold">Connection Failed</span>
+                </div>
+                <p className="pl-8 text-xs">{error}</p>
+                
+                {/* Fallback & Debug */}
+                <div className="pl-8 mt-2 flex flex-col gap-2">
+                    <button 
+                        onClick={() => fetchData(sheetUrl, true)}
+                        className="text-xs text-white bg-red-600 hover:bg-red-700 px-3 py-2 rounded text-center w-full font-semibold transition-colors shadow-sm"
+                    >
+                        Try Force CSV Mode (Text Only)
+                    </button>
+                    
+                    <details className="mt-2 text-xs text-slate-500 border border-slate-200 rounded bg-white p-2">
+                        <summary className="cursor-pointer font-medium flex items-center gap-1">
+                            <Bug size={12}/> View Debug Log
+                        </summary>
+                        <pre className="mt-2 whitespace-pre-wrap font-mono text-[10px] bg-slate-50 p-2 rounded">
+                            {debugLog}
+                        </pre>
+                    </details>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans relative" onMouseMove={handleMouseMove}>
+      <header className="bg-white shadow-sm sticky top-0 z-30 px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-blue-600">
+          <MapPin className="fill-blue-600 text-white" />
+          <span className="font-bold text-lg tracking-tight text-slate-900">My Trip</span>
+        </div>
+        <div className="flex gap-2 items-center">
+          <button
+            onClick={copyShareLink}
+            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors flex items-center gap-1"
+            title="Copy Share Link"
+          >
+            {copied ? <Check size={20} className="text-green-500" /> : <Share2 size={20} />}
+          </button>
+          
+          <button
+            onClick={() => fetchData(sheetUrl)}
+            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+            title="Refresh Data"
+          >
+            <RefreshCw size={20} />
+          </button>
+          <button 
+            onClick={handleReset}
+            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+            title="Disconnect Sheet"
+          >
+            <Settings size={20} />
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto p-4 pb-20 space-y-4">
+        {items.length === 0 && (
+          <div className="text-center py-10 text-slate-400">
+            No locations found in spreadsheet.
+          </div>
+        )}
+        
+        {items.map((item, idx) => (
+          <div 
+            key={idx}
+            className="group relative bg-white rounded-xl shadow-sm hover:shadow-md border border-slate-100 transition-all duration-200 overflow-hidden cursor-pointer"
+            onMouseEnter={() => setHoveredItem(item)}
+            onMouseLeave={() => setHoveredItem(null)}
+          >
+            <div className="flex items-start p-4 gap-4">
+              <div className="flex-shrink-0">
+                {item.photo && item.photo.length > 5 ? (
+                  <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 border border-gray-200 relative">
+                     <img 
+                      src={item.photo} 
+                      alt={item.name} 
+                      className="w-full h-full object-cover"
+                      onError={(e) => { 
+                        e.target.style.display = 'none'; 
+                        e.target.parentNode.innerHTML = `<div class="w-full h-full flex items-center justify-center bg-gray-100 text-xs text-gray-400 text-center p-1">No Img</div>`;
+                      }} 
+                    />
+                  </div>
+                ) : (
+                  <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center font-bold text-lg group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                    {idx + 1}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex-grow min-w-0 pt-1" onClick={() => setSelectedItem(item)}>
+                <h3 className="font-bold text-slate-800 truncate group-hover:text-blue-600 transition-colors text-lg">
+                  {item.name}
+                </h3>
+                {item.shortInfo && (
+                  <p className="text-sm text-slate-600 mt-1 line-clamp-2 leading-snug">
+                    {item.shortInfo}
+                  </p>
+                )}
+                {item.coords && item.coords.lat && (
+                  <p className="text-xs text-slate-400 flex items-center gap-1 mt-2">
+                    <Navigation size={12} />
+                    {item.coords.lat}, {item.coords.lng}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex-shrink-0 flex flex-col gap-2 pt-1">
+                <a 
+                  href={item.mapLink} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"
+                  onClick={(e) => e.stopPropagation()}
+                  title="Open Maps"
+                >
+                  <Navigation size={20} />
+                </a>
+                {item.details && (
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedItem(item);
+                    }}
+                    className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                    title="View Details"
+                  >
+                    <Info size={20} />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+        {items.length > 0 && <div className="text-center pt-8 text-slate-400 text-sm">End of Itinerary</div>}
+      </main>
+
+      <div className="hidden md:block">
+        <HoverCard />
+      </div>
+
+      {selectedItem && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto flex flex-col">
+            <div className="sticky top-0 bg-white border-b border-slate-100 p-4 flex items-center justify-between z-10">
+              <h2 className="font-bold text-xl text-slate-800 truncate pr-4">{selectedItem.name}</h2>
+              <button 
+                onClick={() => setSelectedItem(null)}
+                className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-0">
+              {selectedItem.photo && selectedItem.photo.length > 5 && (
+                <div className="w-full h-64 bg-slate-100 relative group">
+                  <img 
+                    src={selectedItem.photo} 
+                    alt={selectedItem.name}
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      e.target.onerror = null; 
+                      e.target.src = 'https://placehold.co/600x400?text=Image+Error';
+                    }}
+                  />
+                </div>
+              )}
+              <div className="p-6 space-y-6">
+                {selectedItem.shortInfo && (
+                  <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-lg font-medium leading-relaxed border border-blue-100 shadow-sm">
+                    "{selectedItem.shortInfo}"
+                  </div>
+                )}
+                <div className="prose prose-slate">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-2">Details</h3>
+                  {selectedItem.details ? (
+                    <p className="text-slate-600 whitespace-pre-wrap leading-relaxed">{selectedItem.details}</p>
+                  ) : (
+                    <p className="text-slate-400 italic">No additional details provided.</p>
+                  )}
+                </div>
+                <a 
+                  href={selectedItem.mapLink} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full py-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 active:scale-[0.98] transition-all shadow-lg shadow-blue-200"
+                >
+                  <Navigation size={20} />
+                  Navigate to Location
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
