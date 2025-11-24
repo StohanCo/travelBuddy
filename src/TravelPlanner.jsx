@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown, Filter, CheckSquare, Square } from 'lucide-react';
 
+// PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE
+const LOGGING_URL = "https://script.google.com/macros/s/AKfycbw9F9nTP4ijFiUalYFwRpnlIk6109xIdixhzmPCHYirrRLKizewg125ZOEd1XKOIRpAgg/exec"; 
+
 // --- Helper: Smart Image Link Fixer ---
 const fixImageLink = (url) => {
   if (!url || typeof url !== 'string') return '';
@@ -224,6 +227,53 @@ export default function TravelApp() {
   const [visited, setVisited] = useState({});
   const [activeFilter, setActiveFilter] = useState('All');
   const [categories, setCategories] = useState([]);
+
+  // --- LOGGING SYSTEM ---
+  useEffect(() => {
+    // Only log if we have a logging URL and we are in VIEW mode
+    if (appState === 'VIEW' && LOGGING_URL && !sessionStorage.getItem('has_logged_visit')) {
+      const logVisit = async () => {
+        try {
+          // 1. Get Location (Best Effort)
+          let location = "Unknown";
+          try {
+            const locRes = await fetch('https://ipapi.co/json/');
+            if (locRes.ok) {
+              const locData = await locRes.json();
+              location = `${locData.city}, ${locData.country_name}`;
+            }
+          } catch (e) {
+            console.warn("Could not fetch location", e);
+          }
+
+          // 2. Prepare Payload
+          const payload = {
+            location: location,
+            userAgent: navigator.userAgent,
+            screen: `${window.screen.width}x${window.screen.height}`
+          };
+
+          // 3. Send to Google Apps Script
+          // mode: 'no-cors' is crucial for Google Scripts to accept the POST without preflight errors
+          await fetch(LOGGING_URL, {
+            method: 'POST',
+            mode: 'no-cors', 
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify(payload)
+          });
+          
+          // 4. Mark as logged so we don't spam on refresh
+          sessionStorage.setItem('has_logged_visit', 'true');
+          console.log("Visit logged to spreadsheet");
+          
+        } catch (err) {
+          console.error("Logging failed", err);
+        }
+      };
+      
+      logVisit();
+    }
+  }, [appState]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
