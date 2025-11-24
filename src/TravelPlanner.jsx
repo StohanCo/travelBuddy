@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings } from 'lucide-react';
+import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown } from 'lucide-react';
 
 // --- Helper: Smart Image Link Fixer ---
 const fixImageLink = (url) => {
@@ -30,10 +30,8 @@ const parseHTML = (htmlText) => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlText, 'text/html');
   
-  // 1. Try Google Sheets standard class first
   let table = doc.querySelector('.waffle');
   
-  // 2. If not found, look for any table and pick the one with the most rows
   if (!table) {
     const allTables = Array.from(doc.querySelectorAll('table'));
     if (allTables.length > 0) {
@@ -45,15 +43,12 @@ const parseHTML = (htmlText) => {
 
   if (!table) return { headers: [], rows: [] };
 
-  // Get all rows
   let rawRows = Array.from(table.querySelectorAll('tr'));
   
-  // Filter rows: Must have at least one cell (td/th) and some content (text or image)
   let rows = rawRows.filter(r => {
      const cells = r.querySelectorAll('td, th');
      if (cells.length === 0) return false;
      
-     // Check for content
      const hasText = r.innerText.trim().length > 0;
      const hasImg = r.querySelector('img') !== null;
      const hasBgImg = r.innerHTML.includes('background-image');
@@ -63,17 +58,14 @@ const parseHTML = (htmlText) => {
 
   if (rows.length < 2) return { headers: [], rows: [] };
 
-  // Assume first row is header
   const headerCells = Array.from(rows[0].querySelectorAll('td, th'));
   const headers = headerCells.map(cell => cell.innerText.toLowerCase().trim());
 
   const data = [];
   
-  // Process data rows
   for (let i = 1; i < rows.length; i++) {
     const cells = Array.from(rows[i].querySelectorAll('td, th'));
     
-    // Pad cells if missing to match header length
     while (cells.length < headers.length) cells.push({ innerText: '', querySelector: () => null, getAttribute: () => '' });
     
     const rowData = {};
@@ -81,10 +73,7 @@ const parseHTML = (htmlText) => {
       const cell = cells[index];
       if (!cell) return;
 
-      // 1. Try finding explicit img tag
       const imgTag = cell.querySelector('img');
-      
-      // 2. Try finding background image in style (common in Google Sheets)
       const style = cell.getAttribute('style') || '';
       const bgMatch = style.match(/background-image:\s*url\(['"]?(.*?)['"]?\)/);
 
@@ -299,12 +288,14 @@ export default function TravelApp() {
          throw new Error(`Connected successfully, but found no data rows. (${isHTML ? 'HTML Mode' : 'CSV Mode'})`);
       }
 
+      // Updated Map Columns to include "Travel" or "Distance"
       const mapIdx = {
         name: headers.findIndex(h => h.includes('name') || h.includes('place') || h.includes('location')),
         link: headers.findIndex(h => h.includes('link') || h.includes('map') || h.includes('url')),
         short: headers.findIndex(h => h.includes('short') || h.includes('hover') || h.includes('summary')),
         details: headers.findIndex(h => h.includes('detail') || h.includes('desc') || h.includes('info')),
-        photo: headers.findIndex(h => h.includes('photo') || h.includes('img') || h.includes('pic'))
+        photo: headers.findIndex(h => h.includes('photo') || h.includes('img') || h.includes('pic')),
+        travel: headers.findIndex(h => h.includes('travel') || h.includes('distance') || h.includes('time') || h.includes('duration'))
       };
 
       if (mapIdx.name === -1 && mapIdx.link === -1) {
@@ -316,7 +307,6 @@ export default function TravelApp() {
         const extractedLoc = extractLocationData(link);
         
         let displayName = mapIdx.name > -1 ? row[mapIdx.name] : '';
-        // Clean up name if it has HTML in it
         if (displayName && displayName.includes('<')) {
            const tempDiv = document.createElement('div');
            tempDiv.innerHTML = displayName;
@@ -336,6 +326,7 @@ export default function TravelApp() {
           shortInfo: mapIdx.short > -1 ? row[mapIdx.short] : '',
           details: mapIdx.details > -1 ? row[mapIdx.details] : '',
           photo: photoUrl,
+          travelText: mapIdx.travel > -1 ? row[mapIdx.travel] : '',
           coords: extractedLoc
         };
       }).filter(item => item.mapLink && item.mapLink.length > 5); 
@@ -437,8 +428,6 @@ export default function TravelApp() {
                   <span className="font-bold">Connection Failed</span>
                 </div>
                 <p className="pl-8 text-xs">{error}</p>
-                
-                {/* Fallback & Debug */}
                 <div className="pl-8 mt-2 flex flex-col gap-2">
                     <button 
                         onClick={() => fetchData(sheetUrl, true)}
@@ -446,7 +435,6 @@ export default function TravelApp() {
                     >
                         Try Force CSV Mode (Text Only)
                     </button>
-                    
                     <details className="mt-2 text-xs text-slate-500 border border-slate-200 rounded bg-white p-2">
                         <summary className="cursor-pointer font-medium flex items-center gap-1">
                             <Bug size={12}/> View Debug Log
@@ -479,7 +467,6 @@ export default function TravelApp() {
           >
             {copied ? <Check size={20} className="text-green-500" /> : <Share2 size={20} />}
           </button>
-          
           <button
             onClick={() => fetchData(sheetUrl)}
             className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
@@ -497,7 +484,7 @@ export default function TravelApp() {
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto p-4 pb-20 space-y-4">
+      <main className="max-w-2xl mx-auto p-4 pb-20 space-y-0">
         {items.length === 0 && (
           <div className="text-center py-10 text-slate-400">
             No locations found in spreadsheet.
@@ -505,77 +492,93 @@ export default function TravelApp() {
         )}
         
         {items.map((item, idx) => (
-          <div 
-            key={idx}
-            className="group relative bg-white rounded-xl shadow-sm hover:shadow-md border border-slate-100 transition-all duration-200 overflow-hidden cursor-pointer"
-            onMouseEnter={() => setHoveredItem(item)}
-            onMouseLeave={() => setHoveredItem(null)}
-          >
-            <div className="flex items-start p-4 gap-4">
-              <div className="flex-shrink-0">
-                {item.photo && item.photo.length > 5 ? (
-                  <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 border border-gray-200 relative">
-                     <img 
-                      src={item.photo} 
-                      alt={item.name} 
-                      className="w-full h-full object-cover"
-                      onError={(e) => { 
-                        e.target.style.display = 'none'; 
-                        e.target.parentNode.innerHTML = `<div class="w-full h-full flex items-center justify-center bg-gray-100 text-xs text-gray-400 text-center p-1">No Img</div>`;
-                      }} 
-                    />
-                  </div>
-                ) : (
-                  <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center font-bold text-lg group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                    {idx + 1}
-                  </div>
-                )}
-              </div>
+          <div key={idx} className="relative">
+            {/* Travel Time Connector (Shown Above current item if it has text) */}
+            {item.travelText && (
+               <div className="flex flex-col items-center py-2 relative z-10 -my-2">
+                 <div className="h-4 w-0.5 border-l-2 border-dashed border-blue-200"></div>
+                 <div className="bg-blue-50 text-blue-700 text-xs font-bold px-3 py-1 rounded-full border border-blue-100 shadow-sm flex items-center gap-1">
+                    <Clock size={10} />
+                    {item.travelText}
+                    <ArrowDown size={10} />
+                 </div>
+                 <div className="h-4 w-0.5 border-l-2 border-dashed border-blue-200"></div>
+               </div>
+            )}
+            
+            {/* Main Card */}
+            <div 
+              className="group relative bg-white rounded-xl shadow-sm hover:shadow-md border border-slate-100 transition-all duration-200 overflow-hidden cursor-pointer z-20 mb-4"
+              onMouseEnter={() => setHoveredItem(item)}
+              onMouseLeave={() => setHoveredItem(null)}
+            >
+              <div className="flex items-start p-4 gap-4">
+                <div className="flex-shrink-0">
+                  {item.photo && item.photo.length > 5 ? (
+                    <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 border border-gray-200 relative">
+                       <img 
+                        src={item.photo} 
+                        alt={item.name} 
+                        className="w-full h-full object-cover"
+                        onError={(e) => { 
+                          e.target.style.display = 'none'; 
+                          e.target.parentNode.innerHTML = `<div class="w-full h-full flex items-center justify-center bg-gray-100 text-xs text-gray-400 text-center p-1">No Img</div>`;
+                        }} 
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center font-bold text-lg group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                      {idx + 1}
+                    </div>
+                  )}
+                </div>
 
-              <div className="flex-grow min-w-0 pt-1" onClick={() => setSelectedItem(item)}>
-                <h3 className="font-bold text-slate-800 truncate group-hover:text-blue-600 transition-colors text-lg">
-                  {item.name}
-                </h3>
-                {item.shortInfo && (
-                  <p className="text-sm text-slate-600 mt-1 line-clamp-2 leading-snug">
-                    {item.shortInfo}
-                  </p>
-                )}
-                {item.coords && item.coords.lat && (
-                  <p className="text-xs text-slate-400 flex items-center gap-1 mt-2">
-                    <Navigation size={12} />
-                    {item.coords.lat}, {item.coords.lng}
-                  </p>
-                )}
-              </div>
+                <div className="flex-grow min-w-0 pt-1" onClick={() => setSelectedItem(item)}>
+                  <h3 className="font-bold text-slate-800 truncate group-hover:text-blue-600 transition-colors text-lg">
+                    {item.name}
+                  </h3>
+                  {item.shortInfo && (
+                    <p className="text-sm text-slate-600 mt-1 line-clamp-2 leading-snug">
+                      {item.shortInfo}
+                    </p>
+                  )}
+                  {item.coords && item.coords.lat && (
+                    <p className="text-xs text-slate-400 flex items-center gap-1 mt-2">
+                      <Navigation size={12} />
+                      {item.coords.lat}, {item.coords.lng}
+                    </p>
+                  )}
+                </div>
 
-              <div className="flex-shrink-0 flex flex-col gap-2 pt-1">
-                <a 
-                  href={item.mapLink} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"
-                  onClick={(e) => e.stopPropagation()}
-                  title="Open Maps"
-                >
-                  <Navigation size={20} />
-                </a>
-                {item.details && (
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedItem(item);
-                    }}
-                    className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
-                    title="View Details"
+                <div className="flex-shrink-0 flex flex-col gap-2 pt-1">
+                  <a 
+                    href={item.mapLink} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"
+                    onClick={(e) => e.stopPropagation()}
+                    title="Open Maps"
                   >
-                    <Info size={20} />
-                  </button>
-                )}
+                    <Navigation size={20} />
+                  </a>
+                  {item.details && (
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedItem(item);
+                      }}
+                      className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                      title="View Details"
+                    >
+                      <Info size={20} />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
         ))}
+        
         {items.length > 0 && <div className="text-center pt-8 text-slate-400 text-sm">End of Itinerary</div>}
       </main>
 
