@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown, Filter, CheckSquare, Square } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown, Filter, CheckSquare, Square, Map as MapIcon, List } from 'lucide-react';
 
 // PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE
 const LOGGING_URL = "https://script.google.com/macros/s/AKfycbw9F9nTP4ijFiUalYFwRpnlIk6109xIdixhzmPCHYirrRLKizewg125ZOEd1XKOIRpAgg/exec"; 
@@ -9,7 +9,6 @@ const fixImageLink = (url) => {
   if (!url || typeof url !== 'string') return '';
   let newUrl = url.trim();
 
-  // Fix Google Drive Links
   if (newUrl.includes('drive.google.com')) {
     const idMatch = newUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
     if (idMatch && idMatch[1]) {
@@ -33,52 +32,59 @@ const getTypeStyles = (type) => {
   if (!type) return {
     border: 'border-l-4 border-l-transparent',
     badge: 'bg-slate-100 text-slate-500 border-slate-200',
-    number: 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white'
+    number: 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white',
+    pin: '#2563eb', // blue-600
+    bg: '#eff6ff'   // blue-50
   };
 
   const t = type.toLowerCase().trim();
 
-  // FOOD (Orange)
   if (['food', 'restaurant', 'cafe', 'dinner', 'lunch', 'breakfast', 'bar', 'snack'].some(x => t.includes(x))) {
     return {
       border: 'border-l-4 border-l-orange-400',
       badge: 'bg-orange-100 text-orange-800 border-orange-200',
-      number: 'bg-orange-100 text-orange-600 group-hover:bg-orange-500 group-hover:text-white'
+      number: 'bg-orange-100 text-orange-600 group-hover:bg-orange-500 group-hover:text-white',
+      pin: '#f97316', // orange-500
+      bg: '#fff7ed'   // orange-50
     };
   }
 
-  // HOTEL (Indigo)
   if (['hotel', 'stay', 'accommodation', 'airbnb', 'motel', 'hostel'].some(x => t.includes(x))) {
     return {
       border: 'border-l-4 border-l-indigo-400',
       badge: 'bg-indigo-100 text-indigo-800 border-indigo-200',
-      number: 'bg-indigo-100 text-indigo-600 group-hover:bg-indigo-500 group-hover:text-white'
+      number: 'bg-indigo-100 text-indigo-600 group-hover:bg-indigo-500 group-hover:text-white',
+      pin: '#6366f1', // indigo-500
+      bg: '#eef2ff'   // indigo-50
     };
   }
 
-  // SIGHT / NATURE (Emerald)
   if (['sight', 'view', 'park', 'nature', 'hike', 'beach', 'garden'].some(x => t.includes(x))) {
     return {
       border: 'border-l-4 border-l-emerald-400',
       badge: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-      number: 'bg-emerald-100 text-emerald-600 group-hover:bg-emerald-500 group-hover:text-white'
+      number: 'bg-emerald-100 text-emerald-600 group-hover:bg-emerald-500 group-hover:text-white',
+      pin: '#10b981', // emerald-500
+      bg: '#ecfdf5'   // emerald-50
     };
   }
 
-  // ATTRACTION (Rose)
   if (['attraction', 'museum', 'activity', 'tour', 'fun', 'landmark'].some(x => t.includes(x))) {
     return {
       border: 'border-l-4 border-l-rose-400',
       badge: 'bg-rose-100 text-rose-800 border-rose-200',
-      number: 'bg-rose-100 text-rose-600 group-hover:bg-rose-500 group-hover:text-white'
+      number: 'bg-rose-100 text-rose-600 group-hover:bg-rose-500 group-hover:text-white',
+      pin: '#f43f5e', // rose-500
+      bg: '#fff1f2'   // rose-50
     };
   }
 
-  // Default
   return {
     border: 'border-l-4 border-l-slate-300',
     badge: 'bg-slate-100 text-slate-600 border-slate-200',
-    number: 'bg-slate-100 text-slate-600 group-hover:bg-slate-500 group-hover:text-white'
+    number: 'bg-slate-100 text-slate-600 group-hover:bg-slate-500 group-hover:text-white',
+    pin: '#64748b', // slate-500
+    bg: '#f1f5f9'   // slate-100
   };
 };
 
@@ -122,18 +128,14 @@ const parseHTML = (htmlText) => {
   
   for (let i = 1; i < rows.length; i++) {
     const cells = Array.from(rows[i].querySelectorAll('td, th'));
-    
     while (cells.length < headers.length) cells.push({ innerText: '', querySelector: () => null, getAttribute: () => '' });
-    
     const rowData = {};
     headers.forEach((header, index) => {
       const cell = cells[index];
       if (!cell) return;
-
       const imgTag = cell.querySelector('img');
       const style = cell.getAttribute('style') || '';
       const bgMatch = style.match(/background-image:\s*url\(['"]?(.*?)['"]?\)/);
-
       if (imgTag) {
         rowData[index] = imgTag.src; 
       } else if (bgMatch && bgMatch[1]) {
@@ -144,14 +146,12 @@ const parseHTML = (htmlText) => {
     });
     data.push(Object.values(rowData));
   }
-  
   return { headers, rows: data };
 };
 
 // --- Helper: CSV Parser ---
 const parseCSV = (text) => {
   if (!text || typeof text !== 'string') return { headers: [], rows: [] };
-  
   const rows = [];
   let currentRow = [];
   let currentCell = '';
@@ -160,34 +160,15 @@ const parseCSV = (text) => {
 
   for (let i = 0; i < cleanText.length; i++) {
     const char = cleanText[i];
-    const nextChar = cleanText[i + 1];
-
     if (char === '"') {
-      if (insideQuotes && nextChar === '"') {
-        currentCell += '"';
-        i++;
-      } else {
-        insideQuotes = !insideQuotes;
-      }
+      if (insideQuotes && cleanText[i+1] === '"') { currentCell += '"'; i++; } else { insideQuotes = !insideQuotes; }
     } else if (char === ',' && !insideQuotes) {
-      currentRow.push(currentCell.trim());
-      currentCell = '';
+      currentRow.push(currentCell.trim()); currentCell = '';
     } else if (char === '\n' && !insideQuotes) {
-      if (currentCell || currentRow.length > 0) {
-        currentRow.push(currentCell.trim());
-        rows.push(currentRow);
-        currentRow = [];
-        currentCell = '';
-      }
-    } else {
-      currentCell += char;
-    }
+      if (currentCell || currentRow.length > 0) { currentRow.push(currentCell.trim()); rows.push(currentRow); currentRow = []; currentCell = ''; }
+    } else { currentCell += char; }
   }
-  if (currentCell || currentRow.length > 0) {
-    currentRow.push(currentCell.trim());
-    rows.push(currentRow);
-  }
-
+  if (currentCell || currentRow.length > 0) { currentRow.push(currentCell.trim()); rows.push(currentRow); }
   if (rows.length === 0) return { headers: [], rows: [] };
   const headers = rows[0].map(h => h.toLowerCase().trim());
   return { headers, rows: rows.slice(1) };
@@ -199,16 +180,140 @@ const extractLocationData = (url) => {
   const coordsRegex = /@(-?\d+\.\d+),(-?\d+\.\d+)/;
   const searchRegex = /search\/(-?\d+\.\d+),\+?(-?\d+\.\d+)/;
   let lat = null, lng = null;
-
   const coordsMatch = url.match(coordsRegex);
   if (coordsMatch) { lat = coordsMatch[1]; lng = coordsMatch[2]; }
   else {
     const searchMatch = url.match(searchRegex);
     if (searchMatch) { lat = searchMatch[1]; lng = searchMatch[2]; }
   }
-
   if (lat && lng) return { lat, lng };
   return null;
+};
+
+// --- COMPONENT: Interactive Map View ---
+const MapView = ({ items, onSelect }) => {
+  const mapContainer = useRef(null);
+  const mapInstance = useRef(null);
+
+  useEffect(() => {
+    // 1. Load Leaflet from CDN if not present
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link');
+      link.id = 'leaflet-css';
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+
+    if (!window.L) {
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      script.onload = initMap;
+      document.head.appendChild(script);
+    } else {
+      initMap();
+    }
+
+    return () => {
+      if (mapInstance.current) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+      }
+    };
+  }, []);
+
+  const initMap = () => {
+    if (mapInstance.current || !mapContainer.current || !window.L) return;
+
+    const L = window.L;
+    const map = L.map(mapContainer.current);
+    mapInstance.current = map;
+
+    // Add Tile Layer (OpenStreetMap)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 20
+    }).addTo(map);
+
+    // Filter valid coordinates
+    const validPoints = items.filter(i => i.coords && !i.isHeader);
+    const latLngs = [];
+
+    validPoints.forEach((item, idx) => {
+      const { lat, lng } = item.coords;
+      latLngs.push([lat, lng]);
+
+      const styles = getTypeStyles(item.type);
+
+      // Custom HTML Icon
+      const iconHtml = `
+        <div style="
+          background-color: ${styles.bg};
+          color: ${styles.pin};
+          border: 2px solid ${styles.pin};
+          width: 30px;
+          height: 30px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: bold;
+          font-size: 14px;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        ">${idx + 1}</div>
+      `;
+
+      const customIcon = L.divIcon({
+        html: iconHtml,
+        className: 'custom-pin', // dummy class to prevent default styles
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
+        popupAnchor: [0, -15]
+      });
+
+      const marker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
+      
+      // Popup Content
+      const popupContent = `
+        <div style="font-family: sans-serif; min-width: 150px;">
+          <h3 style="margin:0; font-weight:bold; font-size:14px; color:#1e293b">${item.name}</h3>
+          ${item.shortInfo ? `<p style="margin:4px 0; color:#64748b; font-size:12px;">${item.shortInfo}</p>` : ''}
+        </div>
+      `;
+      
+      marker.bindPopup(popupContent);
+      marker.on('click', () => onSelect(item));
+    });
+
+    // Draw Route Line
+    if (latLngs.length > 1) {
+      L.polyline(latLngs, {
+        color: '#3b82f6',
+        weight: 3,
+        opacity: 0.6,
+        dashArray: '5, 10'
+      }).addTo(map);
+    }
+
+    // Fit Bounds
+    if (latLngs.length > 0) {
+      map.fitBounds(L.latLngBounds(latLngs).pad(0.2));
+    } else {
+      map.setView([0, 0], 2);
+    }
+  };
+
+  // Update markers if items change (basic implementation re-inits)
+  useEffect(() => {
+    if (mapInstance.current && window.L) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+        initMap();
+    }
+  }, [items]);
+
+  return <div ref={mapContainer} className="w-full h-[calc(100vh-140px)] bg-slate-100 rounded-xl overflow-hidden shadow-inner" />;
 };
 
 export default function TravelApp() {
@@ -222,6 +327,7 @@ export default function TravelApp() {
   const [hoveredItem, setHoveredItem] = useState(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [copied, setCopied] = useState(false);
+  const [viewMode, setViewMode] = useState('LIST'); // LIST or MAP
   
   // New States for Features
   const [visited, setVisited] = useState({});
@@ -230,11 +336,9 @@ export default function TravelApp() {
 
   // --- LOGGING SYSTEM ---
   useEffect(() => {
-    // Only log if we have a logging URL and we are in VIEW mode
     if (appState === 'VIEW' && LOGGING_URL && !sessionStorage.getItem('has_logged_visit')) {
       const logVisit = async () => {
         try {
-          // 1. Get Location (Best Effort)
           let location = "Unknown";
           try {
             const locRes = await fetch('https://ipapi.co/json/');
@@ -242,35 +346,23 @@ export default function TravelApp() {
               const locData = await locRes.json();
               location = `${locData.city}, ${locData.country_name}`;
             }
-          } catch (e) {
-            console.warn("Could not fetch location", e);
-          }
+          } catch (e) {}
 
-          // 2. Prepare Payload
           const payload = {
             location: location,
             userAgent: navigator.userAgent,
             screen: `${window.screen.width}x${window.screen.height}`
           };
 
-          // 3. Send to Google Apps Script
-          // mode: 'no-cors' is crucial for Google Scripts to accept the POST without preflight errors
           await fetch(LOGGING_URL, {
             method: 'POST',
             mode: 'no-cors', 
             headers: { 'Content-Type': 'text/plain' },
             body: JSON.stringify(payload)
           });
-          
-          // 4. Mark as logged so we don't spam on refresh
           sessionStorage.setItem('has_logged_visit', 'true');
-          console.log("Visit logged to spreadsheet");
-          
-        } catch (err) {
-          console.error("Logging failed", err);
-        }
+        } catch (err) {}
       };
-      
       logVisit();
     }
   }, [appState]);
@@ -313,27 +405,15 @@ export default function TravelApp() {
     let cleanUrl = url.trim();
     
     if (forceCSV) {
-       if (cleanUrl.includes('/pubhtml')) {
-          return cleanUrl.replace('/pubhtml', '/export?format=csv');
-       }
-       if (cleanUrl.includes('/edit') || cleanUrl.includes('/d/')) {
-          return cleanUrl.replace(/\/edit.*$/, '/export?format=csv');
-       }
+       if (cleanUrl.includes('/pubhtml')) return cleanUrl.replace('/pubhtml', '/export?format=csv');
+       if (cleanUrl.includes('/edit') || cleanUrl.includes('/d/')) return cleanUrl.replace(/\/edit.*$/, '/export?format=csv');
     }
-
     if (cleanUrl.includes('output=csv') || cleanUrl.includes('format=csv')) return cleanUrl;
-
-    if (cleanUrl.includes('/edit')) {
-        return cleanUrl.replace(/\/edit.*$/, '/export?format=csv');
-    }
-    
+    if (cleanUrl.includes('/edit')) return cleanUrl.replace(/\/edit.*$/, '/export?format=csv');
     if (cleanUrl.includes('/pubhtml')) {
-        if (!cleanUrl.includes('single=')) {
-           cleanUrl += (cleanUrl.includes('?') ? '&' : '?') + 'gid=0&single=true';
-        }
+        if (!cleanUrl.includes('single=')) cleanUrl += (cleanUrl.includes('?') ? '&' : '?') + 'gid=0&single=true';
         return cleanUrl;
     }
-    
     return cleanUrl;
   };
 
@@ -380,8 +460,6 @@ export default function TravelApp() {
         }
       }
 
-      setDebugLog(prev => prev + `Response Length: ${text.length} chars\n`);
-      
       if (text.trim().toLowerCase().startsWith('<!doctype html') || text.includes('<html')) {
         isHTML = true;
       }
@@ -390,23 +468,17 @@ export default function TravelApp() {
       let rawRows = [];
 
       if (isHTML) {
-        if (forceCSV) {
-             throw new Error('Received HTML but expected CSV. The link might be a "Page" link not a "File" link.');
-        }
+        if (forceCSV) throw new Error('Received HTML but expected CSV.');
         const result = parseHTML(text);
         headers = result?.headers || [];
         rawRows = result?.rows || [];
-        setDebugLog(prev => prev + `Parsed HTML: Found ${headers.length} headers and ${rawRows.length} rows.\n`);
       } else {
         const result = parseCSV(text);
         headers = result?.headers || [];
         rawRows = result?.rows || [];
-        setDebugLog(prev => prev + `Parsed CSV: Found ${headers.length} headers and ${rawRows.length} rows.\n`);
       }
 
-      if (!headers || headers.length === 0) {
-         throw new Error(`Connected successfully, but found no data rows. (${isHTML ? 'HTML Mode' : 'CSV Mode'})`);
-      }
+      if (!headers || headers.length === 0) throw new Error(`Connected successfully, but found no data rows.`);
 
       const mapIdx = {
         name: headers.findIndex(h => h.includes('name') || h.includes('place') || h.includes('location')),
@@ -418,19 +490,14 @@ export default function TravelApp() {
         type: headers.findIndex(h => h.includes('type') || h.includes('category') || h.includes('tag'))
       };
 
-      if (mapIdx.name === -1 && mapIdx.link === -1) {
-        throw new Error(`Could not find "Name" or "Maps Link" columns. Found headers: [${headers.join(', ')}]`);
-      }
+      if (mapIdx.name === -1 && mapIdx.link === -1) throw new Error(`Could not find "Name" or "Maps Link" columns.`);
 
       const uniqueCategories = new Set();
 
       const parsedItems = rawRows.map((row, idx) => {
         const link = mapIdx.link > -1 ? row[mapIdx.link] : '';
         const name = mapIdx.name > -1 ? row[mapIdx.name] : '';
-        
-        // Detect Header
         const isHeader = name && (!link || link.length < 5);
-
         const extractedLoc = extractLocationData(link);
         
         let displayName = name;
@@ -439,7 +506,6 @@ export default function TravelApp() {
            tempDiv.innerHTML = displayName;
            displayName = tempDiv.innerText;
         }
-
         if (!displayName && extractedLoc) displayName = `Location ${idx + 1}`;
         else if (!displayName && !isHeader) displayName = "Unnamed Location";
 
@@ -463,7 +529,7 @@ export default function TravelApp() {
         };
       }).filter(item => item.isHeader || (item.mapLink && item.mapLink.length > 5)); 
 
-      if (parsedItems.length === 0) throw new Error('No valid locations found. Check that the "Maps Link" column has valid Google Maps URLs.');
+      if (parsedItems.length === 0) throw new Error('No valid locations found.');
 
       setItems(parsedItems);
       setCategories(Array.from(uniqueCategories));
@@ -604,32 +670,48 @@ export default function TravelApp() {
             <span className="font-bold text-lg tracking-tight text-slate-900">My Trip</span>
             </div>
             <div className="flex gap-2 items-center">
-            <button
-                onClick={copyShareLink}
-                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors flex items-center gap-1"
-                title="Copy Share Link"
-            >
-                {copied ? <Check size={20} className="text-green-500" /> : <Share2 size={20} />}
-            </button>
-            <button
-                onClick={() => fetchData(sheetUrl)}
-                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
-                title="Refresh Data"
-            >
-                <RefreshCw size={20} />
-            </button>
-            <button 
-                onClick={handleReset}
-                className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
-                title="Disconnect Sheet"
-            >
-                <Settings size={20} />
-            </button>
+              {/* View Toggle */}
+              <div className="bg-slate-100 p-1 rounded-lg flex mr-2">
+                 <button 
+                    onClick={() => setViewMode('LIST')}
+                    className={`p-1.5 rounded-md transition-all ${viewMode === 'LIST' ? 'bg-white shadow text-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
+                 >
+                    <List size={18} />
+                 </button>
+                 <button 
+                    onClick={() => setViewMode('MAP')}
+                    className={`p-1.5 rounded-md transition-all ${viewMode === 'MAP' ? 'bg-white shadow text-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
+                 >
+                    <MapIcon size={18} />
+                 </button>
+              </div>
+
+              <button
+                  onClick={copyShareLink}
+                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors flex items-center gap-1"
+                  title="Copy Share Link"
+              >
+                  {copied ? <Check size={20} className="text-green-500" /> : <Share2 size={20} />}
+              </button>
+              <button
+                  onClick={() => fetchData(sheetUrl)}
+                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                  title="Refresh Data"
+              >
+                  <RefreshCw size={20} />
+              </button>
+              <button 
+                  onClick={handleReset}
+                  className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                  title="Disconnect Sheet"
+              >
+                  <Settings size={20} />
+              </button>
             </div>
         </div>
         
-        {/* Category Filters */}
-        {categories.length > 0 && (
+        {/* Category Filters (Only in List Mode) */}
+        {viewMode === 'LIST' && categories.length > 0 && (
             <div className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-hide">
                 <button 
                     onClick={() => setActiveFilter('All')}
@@ -659,144 +741,135 @@ export default function TravelApp() {
       </header>
 
       <main className="max-w-2xl mx-auto p-4 pb-20 space-y-0">
-        {items.length === 0 && (
-          <div className="text-center py-10 text-slate-400">
-            No locations found in spreadsheet.
-          </div>
-        )}
-        
-        {displayedItems.map((item, idx) => {
-          // Get specific styles for this item type
-          const styles = getTypeStyles(item.type);
-          
-          return (
-          <React.Fragment key={idx}>
-            {/* Section Header */}
-            {item.isHeader ? (
-                <div className="py-6 flex items-center gap-4">
-                    <div className="h-px bg-slate-200 flex-grow"></div>
-                    <h2 className="text-lg font-bold text-slate-700 uppercase tracking-wider">{item.name}</h2>
-                    <div className="h-px bg-slate-200 flex-grow"></div>
-                </div>
-            ) : (
-                /* Standard Item */
-                <div className="relative">
-                    {/* Travel Time Connector */}
-                    {item.travelText && activeFilter === 'All' && (
-                    <div className="flex flex-col items-center py-2 relative z-10 -my-2">
-                        <div className="h-4 w-0.5 border-l-2 border-dashed border-blue-200"></div>
-                        <div className="bg-blue-50 text-blue-700 text-xs font-bold px-3 py-1 rounded-full border border-blue-100 shadow-sm flex items-center gap-1">
-                            <Clock size={10} />
-                            {item.travelText}
-                            <ArrowDown size={10} />
-                        </div>
-                        <div className="h-4 w-0.5 border-l-2 border-dashed border-blue-200"></div>
+        {viewMode === 'MAP' ? (
+           <MapView items={displayedItems} onSelect={setSelectedItem} />
+        ) : (
+          /* LIST VIEW */
+          <>
+            {items.length === 0 && (
+              <div className="text-center py-10 text-slate-400">
+                No locations found in spreadsheet.
+              </div>
+            )}
+            
+            {displayedItems.map((item, idx) => {
+              const styles = getTypeStyles(item.type);
+              return (
+              <React.Fragment key={idx}>
+                {/* Section Header */}
+                {item.isHeader ? (
+                    <div className="py-6 flex items-center gap-4">
+                        <div className="h-px bg-slate-200 flex-grow"></div>
+                        <h2 className="text-lg font-bold text-slate-700 uppercase tracking-wider">{item.name}</h2>
+                        <div className="h-px bg-slate-200 flex-grow"></div>
                     </div>
-                    )}
-                    
-                    {/* Main Card with Dynamic Border Color */}
-                    <div 
-                    className={`group relative bg-white rounded-xl shadow-sm hover:shadow-md border transition-all duration-200 overflow-hidden cursor-pointer z-20 mb-4 ${
-                        styles.border
-                    } ${
-                        visited[item.id] ? 'opacity-60 border-slate-100 bg-slate-50' : 'border-slate-100'
-                    }`}
-                    onMouseEnter={() => setHoveredItem(item)}
-                    onMouseLeave={() => setHoveredItem(null)}
-                    >
-                    <div className="flex items-start p-4 gap-4">
-                        {/* Checkbox */}
-                        <div className="pt-2" onClick={(e) => toggleVisited(item.id, e)}>
-                            {visited[item.id] ? (
-                                <CheckSquare className="text-blue-500 cursor-pointer" size={20} />
-                            ) : (
-                                <Square className="text-slate-300 hover:text-blue-500 cursor-pointer" size={20} />
-                            )}
+                ) : (
+                    /* Standard Item */
+                    <div className="relative">
+                        {/* Travel Time Connector */}
+                        {item.travelText && activeFilter === 'All' && (
+                        <div className="flex flex-col items-center py-2 relative z-10 -my-2">
+                            <div className="h-4 w-0.5 border-l-2 border-dashed border-blue-200"></div>
+                            <div className="bg-blue-50 text-blue-700 text-xs font-bold px-3 py-1 rounded-full border border-blue-100 shadow-sm flex items-center gap-1">
+                                <Clock size={10} />
+                                {item.travelText}
+                                <ArrowDown size={10} />
+                            </div>
+                            <div className="h-4 w-0.5 border-l-2 border-dashed border-blue-200"></div>
                         </div>
-
-                        <div className="flex-shrink-0">
-                        {item.photo && item.photo.length > 5 ? (
-                            <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 border border-gray-200 relative">
-                            <img 
-                                src={item.photo} 
-                                alt={item.name} 
-                                className={`w-full h-full object-cover ${visited[item.id] ? 'grayscale' : ''}`}
-                                onError={(e) => { 
-                                e.target.style.display = 'none'; 
-                                e.target.parentNode.innerHTML = `<div class="w-full h-full flex items-center justify-center bg-gray-100 text-xs text-gray-400 text-center p-1">No Img</div>`;
-                                }} 
-                            />
-                            </div>
-                        ) : (
-                            // Dynamic Number Circle Color
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg transition-colors ${
-                                visited[item.id] ? 'bg-slate-200 text-slate-400' : styles.number
-                            }`}>
-                            {idx + 1}
-                            </div>
                         )}
-                        </div>
-
-                        <div className="flex-grow min-w-0 pt-1" onClick={() => setSelectedItem(item)}>
-                            <div className="flex items-center gap-2">
-                                <h3 className={`font-bold truncate transition-colors text-lg ${
-                                    visited[item.id] ? 'text-slate-500 line-through decoration-slate-400' : 'text-slate-800 group-hover:text-blue-600'
-                                }`}>
-                                    {item.name}
-                                </h3>
-                                {/* Dynamic Type Badge */}
-                                {item.type && (
-                                    <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${styles.badge}`}>
-                                        {item.type}
-                                    </span>
+                        
+                        <div 
+                        className={`group relative bg-white rounded-xl shadow-sm hover:shadow-md border transition-all duration-200 overflow-hidden cursor-pointer z-20 mb-4 ${styles.border} ${visited[item.id] ? 'opacity-60 border-slate-100 bg-slate-50' : 'border-slate-100'}`}
+                        onMouseEnter={() => setHoveredItem(item)}
+                        onMouseLeave={() => setHoveredItem(null)}
+                        >
+                        <div className="flex items-start p-4 gap-4">
+                            <div className="pt-2" onClick={(e) => toggleVisited(item.id, e)}>
+                                {visited[item.id] ? (
+                                    <CheckSquare className="text-blue-500 cursor-pointer" size={20} />
+                                ) : (
+                                    <Square className="text-slate-300 hover:text-blue-500 cursor-pointer" size={20} />
                                 )}
                             </div>
 
-                            {item.shortInfo && (
-                                <p className="text-sm text-slate-600 mt-1 line-clamp-2 leading-snug">
-                                {item.shortInfo}
-                                </p>
+                            <div className="flex-shrink-0">
+                            {item.photo && item.photo.length > 5 ? (
+                                <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 border border-gray-200 relative">
+                                <img 
+                                    src={item.photo} 
+                                    alt={item.name} 
+                                    className={`w-full h-full object-cover ${visited[item.id] ? 'grayscale' : ''}`}
+                                    onError={(e) => { 
+                                    e.target.style.display = 'none'; 
+                                    e.target.parentNode.innerHTML = `<div class="w-full h-full flex items-center justify-center bg-gray-100 text-xs text-gray-400 text-center p-1">No Img</div>`;
+                                    }} 
+                                />
+                                </div>
+                            ) : (
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg transition-colors ${visited[item.id] ? 'bg-slate-200 text-slate-400' : styles.number}`}>
+                                {idx + 1}
+                                </div>
                             )}
-                            {item.coords && item.coords.lat && (
-                                <p className="text-xs text-slate-400 flex items-center gap-1 mt-2">
-                                <Navigation size={12} />
-                                {item.coords.lat}, {item.coords.lng}
-                                </p>
-                            )}
-                        </div>
+                            </div>
 
-                        <div className="flex-shrink-0 flex flex-col gap-2 pt-1">
-                        <a 
-                            href={item.mapLink} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"
-                            onClick={(e) => e.stopPropagation()}
-                            title="Open Maps"
-                        >
-                            <Navigation size={20} />
-                        </a>
-                        {item.details && (
-                            <button 
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedItem(item);
-                            }}
-                            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
-                            title="View Details"
+                            <div className="flex-grow min-w-0 pt-1" onClick={() => setSelectedItem(item)}>
+                                <div className="flex items-center gap-2">
+                                    <h3 className={`font-bold truncate transition-colors text-lg ${visited[item.id] ? 'text-slate-500 line-through decoration-slate-400' : 'text-slate-800 group-hover:text-blue-600'}`}>
+                                        {item.name}
+                                    </h3>
+                                    {item.type && (
+                                        <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${styles.badge}`}>
+                                            {item.type}
+                                        </span>
+                                    )}
+                                </div>
+
+                                {item.shortInfo && (
+                                    <p className="text-sm text-slate-600 mt-1 line-clamp-2 leading-snug">
+                                    {item.shortInfo}
+                                    </p>
+                                )}
+                                {item.coords && item.coords.lat && (
+                                    <p className="text-xs text-slate-400 flex items-center gap-1 mt-2">
+                                    <Navigation size={12} />
+                                    {item.coords.lat}, {item.coords.lng}
+                                    </p>
+                                )}
+                            </div>
+
+                            <div className="flex-shrink-0 flex flex-col gap-2 pt-1">
+                            <a 
+                                href={item.mapLink} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"
+                                onClick={(e) => e.stopPropagation()}
                             >
-                            <Info size={20} />
-                            </button>
-                        )}
+                                <Navigation size={20} />
+                            </a>
+                            {item.details && (
+                                <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedItem(item);
+                                }}
+                                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                                >
+                                <Info size={20} />
+                                </button>
+                            )}
+                            </div>
+                        </div>
                         </div>
                     </div>
-                    </div>
-                </div>
-            )}
-          </React.Fragment>
-        )})}
-        
-        {items.length > 0 && <div className="text-center pt-8 text-slate-400 text-sm">End of Itinerary</div>}
+                )}
+              </React.Fragment>
+            )})}
+            
+            {items.length > 0 && <div className="text-center pt-8 text-slate-400 text-sm">End of Itinerary</div>}
+          </>
+        )}
       </main>
 
       <div className="hidden md:block">
