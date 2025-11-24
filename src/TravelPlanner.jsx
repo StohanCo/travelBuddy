@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown } from 'lucide-react';
+import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown, Filter, CheckSquare, Square } from 'lucide-react';
 
 // --- Helper: Smart Image Link Fixer ---
 const fixImageLink = (url) => {
@@ -165,6 +165,11 @@ export default function TravelApp() {
   const [hoveredItem, setHoveredItem] = useState(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [copied, setCopied] = useState(false);
+  
+  // New States for Features
+  const [visited, setVisited] = useState({});
+  const [activeFilter, setActiveFilter] = useState('All');
+  const [categories, setCategories] = useState([]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -174,11 +179,24 @@ export default function TravelApp() {
       fetchData(urlFromParam);
     } else {
       const savedUrl = localStorage.getItem('travel_sheet_url');
-      if (savedUrl) setSheetUrl(savedUrl);
+      if (savedUrl) {
+        setSheetUrl(savedUrl);
+        // Load visited state specific to this sheet if possible, currently using a simple key
+        // Ideally we hash the URL, but using the raw URL as part of key is fine for simple usage
+        const savedVisited = localStorage.getItem(`visited_${savedUrl}`);
+        if (savedVisited) setVisited(JSON.parse(savedVisited));
+      }
     }
   }, []);
 
   const handleMouseMove = (e) => setMousePos({ x: e.clientX, y: e.clientY });
+
+  const toggleVisited = (id, e) => {
+    e.stopPropagation();
+    const newVisited = { ...visited, [id]: !visited[id] };
+    setVisited(newVisited);
+    localStorage.setItem(`visited_${sheetUrl}`, JSON.stringify(newVisited));
+  };
 
   const copyShareLink = () => {
     const baseUrl = window.location.href.split('?')[0];
@@ -288,25 +306,32 @@ export default function TravelApp() {
          throw new Error(`Connected successfully, but found no data rows. (${isHTML ? 'HTML Mode' : 'CSV Mode'})`);
       }
 
-      // Updated Map Columns to include "Travel" or "Distance"
       const mapIdx = {
         name: headers.findIndex(h => h.includes('name') || h.includes('place') || h.includes('location')),
         link: headers.findIndex(h => h.includes('link') || h.includes('map') || h.includes('url')),
         short: headers.findIndex(h => h.includes('short') || h.includes('hover') || h.includes('summary')),
         details: headers.findIndex(h => h.includes('detail') || h.includes('desc') || h.includes('info')),
         photo: headers.findIndex(h => h.includes('photo') || h.includes('img') || h.includes('pic')),
-        travel: headers.findIndex(h => h.includes('travel') || h.includes('distance') || h.includes('time') || h.includes('duration'))
+        travel: headers.findIndex(h => h.includes('travel') || h.includes('distance') || h.includes('time') || h.includes('duration')),
+        type: headers.findIndex(h => h.includes('type') || h.includes('category') || h.includes('tag'))
       };
 
       if (mapIdx.name === -1 && mapIdx.link === -1) {
         throw new Error(`Could not find "Name" or "Maps Link" columns. Found headers: [${headers.join(', ')}]`);
       }
 
+      const uniqueCategories = new Set();
+
       const parsedItems = rawRows.map((row, idx) => {
         const link = mapIdx.link > -1 ? row[mapIdx.link] : '';
+        const name = mapIdx.name > -1 ? row[mapIdx.name] : '';
+        
+        // Detect Header: Name exists, but Link is missing or very short
+        const isHeader = name && (!link || link.length < 5);
+
         const extractedLoc = extractLocationData(link);
         
-        let displayName = mapIdx.name > -1 ? row[mapIdx.name] : '';
+        let displayName = name;
         if (displayName && displayName.includes('<')) {
            const tempDiv = document.createElement('div');
            tempDiv.innerHTML = displayName;
@@ -314,10 +339,13 @@ export default function TravelApp() {
         }
 
         if (!displayName && extractedLoc) displayName = `Location ${idx + 1}`;
-        else if (!displayName) displayName = "Unnamed Location";
+        else if (!displayName && !isHeader) displayName = "Unnamed Location";
 
         let photoUrl = mapIdx.photo > -1 ? row[mapIdx.photo] : '';
         if (photoUrl) photoUrl = fixImageLink(photoUrl);
+        
+        const type = mapIdx.type > -1 ? row[mapIdx.type] : '';
+        if (type) uniqueCategories.add(type);
 
         return {
           id: idx,
@@ -327,15 +355,23 @@ export default function TravelApp() {
           details: mapIdx.details > -1 ? row[mapIdx.details] : '',
           photo: photoUrl,
           travelText: mapIdx.travel > -1 ? row[mapIdx.travel] : '',
-          coords: extractedLoc
+          type: type,
+          coords: extractedLoc,
+          isHeader: isHeader
         };
-      }).filter(item => item.mapLink && item.mapLink.length > 5); 
+      }).filter(item => item.isHeader || (item.mapLink && item.mapLink.length > 5)); 
 
       if (parsedItems.length === 0) throw new Error('No valid locations found. Check that the "Maps Link" column has valid Google Maps URLs.');
 
       setItems(parsedItems);
+      setCategories(Array.from(uniqueCategories));
       setAppState('VIEW');
       localStorage.setItem('travel_sheet_url', urlToFetch);
+      
+      // Load saved visited items
+      const savedVisited = localStorage.getItem(`visited_${urlToFetch}`);
+      if (savedVisited) setVisited(JSON.parse(savedVisited));
+
     } catch (err) {
       console.error(err);
       setError(err.message);
@@ -385,6 +421,13 @@ export default function TravelApp() {
       </div>
     );
   };
+  
+  // Filter logic
+  const displayedItems = items.filter(item => {
+    if (activeFilter === 'All') return true;
+    if (item.isHeader) return false; // Hide headers when filtering specific category
+    return item.type === activeFilter;
+  });
 
   if (appState === 'SETUP') {
     return (
@@ -454,34 +497,65 @@ export default function TravelApp() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans relative" onMouseMove={handleMouseMove}>
-      <header className="bg-white shadow-sm sticky top-0 z-30 px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-blue-600">
-          <MapPin className="fill-blue-600 text-white" />
-          <span className="font-bold text-lg tracking-tight text-slate-900">My Trip</span>
+      <header className="bg-white shadow-sm sticky top-0 z-30 px-4 py-3">
+        <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 text-blue-600">
+            <MapPin className="fill-blue-600 text-white" />
+            <span className="font-bold text-lg tracking-tight text-slate-900">My Trip</span>
+            </div>
+            <div className="flex gap-2 items-center">
+            <button
+                onClick={copyShareLink}
+                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors flex items-center gap-1"
+                title="Copy Share Link"
+            >
+                {copied ? <Check size={20} className="text-green-500" /> : <Share2 size={20} />}
+            </button>
+            <button
+                onClick={() => fetchData(sheetUrl)}
+                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                title="Refresh Data"
+            >
+                <RefreshCw size={20} />
+            </button>
+            <button 
+                onClick={handleReset}
+                className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                title="Disconnect Sheet"
+            >
+                <Settings size={20} />
+            </button>
+            </div>
         </div>
-        <div className="flex gap-2 items-center">
-          <button
-            onClick={copyShareLink}
-            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors flex items-center gap-1"
-            title="Copy Share Link"
-          >
-            {copied ? <Check size={20} className="text-green-500" /> : <Share2 size={20} />}
-          </button>
-          <button
-            onClick={() => fetchData(sheetUrl)}
-            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
-            title="Refresh Data"
-          >
-            <RefreshCw size={20} />
-          </button>
-          <button 
-            onClick={handleReset}
-            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
-            title="Disconnect Sheet"
-          >
-            <Settings size={20} />
-          </button>
-        </div>
+        
+        {/* Category Filters */}
+        {categories.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-hide">
+                <button 
+                    onClick={() => setActiveFilter('All')}
+                    className={`whitespace-nowrap px-3 py-1 rounded-full text-xs font-semibold transition-colors border ${
+                        activeFilter === 'All' 
+                        ? 'bg-blue-600 text-white border-blue-600' 
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300'
+                    }`}
+                >
+                    All
+                </button>
+                {categories.map(cat => (
+                    <button 
+                        key={cat}
+                        onClick={() => setActiveFilter(cat)}
+                        className={`whitespace-nowrap px-3 py-1 rounded-full text-xs font-semibold transition-colors border ${
+                            activeFilter === cat 
+                            ? 'bg-blue-600 text-white border-blue-600' 
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300'
+                        }`}
+                    >
+                        {cat}
+                    </button>
+                ))}
+            </div>
+        )}
       </header>
 
       <main className="max-w-2xl mx-auto p-4 pb-20 space-y-0">
@@ -491,92 +565,127 @@ export default function TravelApp() {
           </div>
         )}
         
-        {items.map((item, idx) => (
-          <div key={idx} className="relative">
-            {/* Travel Time Connector (Shown Above current item if it has text) */}
-            {item.travelText && (
-               <div className="flex flex-col items-center py-2 relative z-10 -my-2">
-                 <div className="h-4 w-0.5 border-l-2 border-dashed border-blue-200"></div>
-                 <div className="bg-blue-50 text-blue-700 text-xs font-bold px-3 py-1 rounded-full border border-blue-100 shadow-sm flex items-center gap-1">
-                    <Clock size={10} />
-                    {item.travelText}
-                    <ArrowDown size={10} />
-                 </div>
-                 <div className="h-4 w-0.5 border-l-2 border-dashed border-blue-200"></div>
-               </div>
-            )}
-            
-            {/* Main Card */}
-            <div 
-              className="group relative bg-white rounded-xl shadow-sm hover:shadow-md border border-slate-100 transition-all duration-200 overflow-hidden cursor-pointer z-20 mb-4"
-              onMouseEnter={() => setHoveredItem(item)}
-              onMouseLeave={() => setHoveredItem(null)}
-            >
-              <div className="flex items-start p-4 gap-4">
-                <div className="flex-shrink-0">
-                  {item.photo && item.photo.length > 5 ? (
-                    <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 border border-gray-200 relative">
-                       <img 
-                        src={item.photo} 
-                        alt={item.name} 
-                        className="w-full h-full object-cover"
-                        onError={(e) => { 
-                          e.target.style.display = 'none'; 
-                          e.target.parentNode.innerHTML = `<div class="w-full h-full flex items-center justify-center bg-gray-100 text-xs text-gray-400 text-center p-1">No Img</div>`;
-                        }} 
-                      />
-                    </div>
-                  ) : (
-                    <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center font-bold text-lg group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                      {idx + 1}
-                    </div>
-                  )}
+        {displayedItems.map((item, idx) => (
+          <React.Fragment key={idx}>
+            {/* Section Header */}
+            {item.isHeader ? (
+                <div className="py-6 flex items-center gap-4">
+                    <div className="h-px bg-slate-200 flex-grow"></div>
+                    <h2 className="text-lg font-bold text-slate-700 uppercase tracking-wider">{item.name}</h2>
+                    <div className="h-px bg-slate-200 flex-grow"></div>
                 </div>
-
-                <div className="flex-grow min-w-0 pt-1" onClick={() => setSelectedItem(item)}>
-                  <h3 className="font-bold text-slate-800 truncate group-hover:text-blue-600 transition-colors text-lg">
-                    {item.name}
-                  </h3>
-                  {item.shortInfo && (
-                    <p className="text-sm text-slate-600 mt-1 line-clamp-2 leading-snug">
-                      {item.shortInfo}
-                    </p>
-                  )}
-                  {item.coords && item.coords.lat && (
-                    <p className="text-xs text-slate-400 flex items-center gap-1 mt-2">
-                      <Navigation size={12} />
-                      {item.coords.lat}, {item.coords.lng}
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex-shrink-0 flex flex-col gap-2 pt-1">
-                  <a 
-                    href={item.mapLink} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"
-                    onClick={(e) => e.stopPropagation()}
-                    title="Open Maps"
-                  >
-                    <Navigation size={20} />
-                  </a>
-                  {item.details && (
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedItem(item);
-                      }}
-                      className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
-                      title="View Details"
+            ) : (
+                /* Standard Item */
+                <div className="relative">
+                    {/* Travel Time Connector */}
+                    {item.travelText && activeFilter === 'All' && (
+                    <div className="flex flex-col items-center py-2 relative z-10 -my-2">
+                        <div className="h-4 w-0.5 border-l-2 border-dashed border-blue-200"></div>
+                        <div className="bg-blue-50 text-blue-700 text-xs font-bold px-3 py-1 rounded-full border border-blue-100 shadow-sm flex items-center gap-1">
+                            <Clock size={10} />
+                            {item.travelText}
+                            <ArrowDown size={10} />
+                        </div>
+                        <div className="h-4 w-0.5 border-l-2 border-dashed border-blue-200"></div>
+                    </div>
+                    )}
+                    
+                    {/* Main Card */}
+                    <div 
+                    className={`group relative bg-white rounded-xl shadow-sm hover:shadow-md border transition-all duration-200 overflow-hidden cursor-pointer z-20 mb-4 ${
+                        visited[item.id] ? 'opacity-60 border-slate-100 bg-slate-50' : 'border-slate-100'
+                    }`}
+                    onMouseEnter={() => setHoveredItem(item)}
+                    onMouseLeave={() => setHoveredItem(null)}
                     >
-                      <Info size={20} />
-                    </button>
-                  )}
+                    <div className="flex items-start p-4 gap-4">
+                        {/* Checkbox */}
+                        <div className="pt-2" onClick={(e) => toggleVisited(item.id, e)}>
+                            {visited[item.id] ? (
+                                <CheckSquare className="text-blue-500 cursor-pointer" size={20} />
+                            ) : (
+                                <Square className="text-slate-300 hover:text-blue-500 cursor-pointer" size={20} />
+                            )}
+                        </div>
+
+                        <div className="flex-shrink-0">
+                        {item.photo && item.photo.length > 5 ? (
+                            <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 border border-gray-200 relative">
+                            <img 
+                                src={item.photo} 
+                                alt={item.name} 
+                                className={`w-full h-full object-cover ${visited[item.id] ? 'grayscale' : ''}`}
+                                onError={(e) => { 
+                                e.target.style.display = 'none'; 
+                                e.target.parentNode.innerHTML = `<div class="w-full h-full flex items-center justify-center bg-gray-100 text-xs text-gray-400 text-center p-1">No Img</div>`;
+                                }} 
+                            />
+                            </div>
+                        ) : (
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg transition-colors ${
+                                visited[item.id] ? 'bg-slate-200 text-slate-400' : 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white'
+                            }`}>
+                            {idx + 1}
+                            </div>
+                        )}
+                        </div>
+
+                        <div className="flex-grow min-w-0 pt-1" onClick={() => setSelectedItem(item)}>
+                            <div className="flex items-center gap-2">
+                                <h3 className={`font-bold truncate transition-colors text-lg ${
+                                    visited[item.id] ? 'text-slate-500 line-through decoration-slate-400' : 'text-slate-800 group-hover:text-blue-600'
+                                }`}>
+                                    {item.name}
+                                </h3>
+                                {item.type && (
+                                    <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">
+                                        {item.type}
+                                    </span>
+                                )}
+                            </div>
+
+                            {item.shortInfo && (
+                                <p className="text-sm text-slate-600 mt-1 line-clamp-2 leading-snug">
+                                {item.shortInfo}
+                                </p>
+                            )}
+                            {item.coords && item.coords.lat && (
+                                <p className="text-xs text-slate-400 flex items-center gap-1 mt-2">
+                                <Navigation size={12} />
+                                {item.coords.lat}, {item.coords.lng}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className="flex-shrink-0 flex flex-col gap-2 pt-1">
+                        <a 
+                            href={item.mapLink} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"
+                            onClick={(e) => e.stopPropagation()}
+                            title="Open Maps"
+                        >
+                            <Navigation size={20} />
+                        </a>
+                        {item.details && (
+                            <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedItem(item);
+                            }}
+                            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                            title="View Details"
+                            >
+                            <Info size={20} />
+                            </button>
+                        )}
+                        </div>
+                    </div>
+                    </div>
                 </div>
-              </div>
-            </div>
-          </div>
+            )}
+          </React.Fragment>
         ))}
         
         {items.length > 0 && <div className="text-center pt-8 text-slate-400 text-sm">End of Itinerary</div>}
