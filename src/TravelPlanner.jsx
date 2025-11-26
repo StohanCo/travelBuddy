@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown, Filter, CheckSquare, Square, Map as MapIcon, List } from 'lucide-react';
+import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown, Filter, CheckSquare, Square, Map as MapIcon, List, Image as ImageIcon } from 'lucide-react';
 
 // PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE
-const LOGGING_URL = "https://script.google.com/macros/s/AKfycbw9F9nTP4ijFiUalYFwRpnlIk6109xIdixhzmPCHYirrRLKizewg125ZOEd1XKOIRpAgg/exec"; 
+const LOGGING_URL = ""; 
 
 // --- Helper: Smart Image Link Fixer ---
 const fixImageLink = (url) => {
@@ -509,8 +509,13 @@ export default function TravelApp() {
         if (!displayName && extractedLoc) displayName = `Location ${idx + 1}`;
         else if (!displayName && !isHeader) displayName = "Unnamed Location";
 
-        let photoUrl = mapIdx.photo > -1 ? row[mapIdx.photo] : '';
-        if (photoUrl) photoUrl = fixImageLink(photoUrl);
+        // Multi-image parsing
+        let rawPhotoData = mapIdx.photo > -1 ? row[mapIdx.photo] : '';
+        let photos = [];
+        if (rawPhotoData) {
+            photos = rawPhotoData.split(',').map(url => fixImageLink(url.trim())).filter(url => url.length > 5);
+        }
+        let primaryPhoto = photos.length > 0 ? photos[0] : '';
         
         const type = mapIdx.type > -1 ? row[mapIdx.type] : '';
         if (type) uniqueCategories.add(type);
@@ -521,7 +526,8 @@ export default function TravelApp() {
           mapLink: link,
           shortInfo: mapIdx.short > -1 ? row[mapIdx.short] : '',
           details: mapIdx.details > -1 ? row[mapIdx.details] : '',
-          photo: photoUrl,
+          photo: primaryPhoto,
+          photos: photos,
           travelText: mapIdx.travel > -1 ? row[mapIdx.travel] : '',
           type: type,
           coords: extractedLoc,
@@ -889,19 +895,31 @@ export default function TravelApp() {
               </button>
             </div>
             <div className="p-0">
-              {selectedItem.photo && selectedItem.photo.length > 5 && (
-                <div className="w-full h-64 bg-slate-100 relative group">
-                  <img 
-                    src={selectedItem.photo} 
-                    alt={selectedItem.name}
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      e.target.onerror = null; 
-                      e.target.src = 'https://placehold.co/600x400?text=Image+Error';
-                    }}
-                  />
-                </div>
-              )}
+              {/* PHOTO CAROUSEL / SINGLE PHOTO */}
+              {selectedItem.photos && selectedItem.photos.length > 0 ? (
+                  <div className="flex overflow-x-auto snap-x snap-mandatory h-64 bg-slate-100">
+                      {selectedItem.photos.map((img, i) => (
+                          <div key={i} className="w-full flex-shrink-0 relative snap-center">
+                              <img 
+                                  src={img} 
+                                  alt={`${selectedItem.name} ${i+1}`}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    e.target.onerror = null; 
+                                    e.target.src = 'https://placehold.co/600x400?text=Image+Error';
+                                  }}
+                              />
+                          </div>
+                      ))}
+                       {/* Optional indicator if multiple photos */}
+                       {selectedItem.photos.length > 1 && (
+                           <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded-full z-10">
+                               {selectedItem.photos.length} photos
+                           </div>
+                       )}
+                  </div>
+              ) : null}
+
               <div className="p-6 space-y-6">
                 {selectedItem.shortInfo && (
                   <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-lg font-medium leading-relaxed border border-blue-100 shadow-sm">
