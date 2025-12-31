@@ -405,16 +405,36 @@ export default function TravelApp() {
     if (!url) return '';
     let cleanUrl = url.trim();
     
-    if (forceCSV) {
-       if (cleanUrl.includes('/pubhtml')) return cleanUrl.replace('/pubhtml', '/export?format=csv');
-       if (cleanUrl.includes('/edit') || cleanUrl.includes('/d/')) return cleanUrl.replace(/\/edit.*$/, '/export?format=csv');
-    }
+    // Already has export format
     if (cleanUrl.includes('output=csv') || cleanUrl.includes('format=csv')) return cleanUrl;
-    if (cleanUrl.includes('/edit')) return cleanUrl.replace(/\/edit.*$/, '/export?format=csv');
+    
+    // Extract the spreadsheet ID from various URL formats
+    const idMatch = cleanUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    
+    if (forceCSV) {
+       if (idMatch) {
+         // Build clean CSV export URL
+         return `https://docs.google.com/spreadsheets/d/${idMatch[1]}/export?format=csv&gid=0`;
+       }
+       if (cleanUrl.includes('/pubhtml')) return cleanUrl.replace('/pubhtml', '/export?format=csv&gid=0');
+    }
+    
+    // Handle /edit URLs
+    if (cleanUrl.includes('/edit')) {
+      return cleanUrl.replace(/\/edit.*$/, '/export?format=csv&gid=0');
+    }
+    
+    // Handle /pubhtml URLs
     if (cleanUrl.includes('/pubhtml')) {
         if (!cleanUrl.includes('single=')) cleanUrl += (cleanUrl.includes('?') ? '&' : '?') + 'gid=0&single=true';
         return cleanUrl;
     }
+    
+    // Handle base spreadsheet URL (no /edit or /pubhtml) - convert to CSV export
+    if (idMatch) {
+      return `https://docs.google.com/spreadsheets/d/${idMatch[1]}/export?format=csv&gid=0`;
+    }
+    
     return cleanUrl;
   };
 
