@@ -239,6 +239,7 @@ const MapView = ({ items, onSelect }) => {
   const [zoom, setZoom] = useState(6);
   const [popup, setPopup] = useState(null);
   const [containerHeight, setContainerHeight] = useState(600);
+  const [hasInitialized, setHasInitialized] = useState(false);
   const containerRef = useRef(null);
 
   // Colors for route segments
@@ -271,8 +272,9 @@ const MapView = ({ items, onSelect }) => {
     return () => window.removeEventListener('resize', updateHeight);
   }, []);
 
+  // Only set initial center/zoom once when data first loads
   useEffect(() => {
-    if (validPoints.length > 0) {
+    if (validPoints.length > 0 && !hasInitialized) {
       const lats = validPoints.map(p => p.lat);
       const lngs = validPoints.map(p => p.lng);
       const minLat = Math.min(...lats);
@@ -282,22 +284,39 @@ const MapView = ({ items, onSelect }) => {
       
       setCenter([(minLat + maxLat) / 2, (minLng + maxLng) / 2]);
       
-      // Rough zoom calculation
-      const diff = Math.max(maxLat - minLat, maxLng - minLng);
-      if (diff > 10) setZoom(4);
-      else if (diff > 5) setZoom(6);
-      else if (diff > 1) setZoom(8);
-      else if (diff > 0.5) setZoom(10);
-      else setZoom(12);
+      // Better zoom calculation with more padding
+      const latDiff = maxLat - minLat;
+      const lngDiff = maxLng - minLng;
+      const diff = Math.max(latDiff, lngDiff);
+      
+      let newZoom;
+      if (diff > 20) newZoom = 2;
+      else if (diff > 10) newZoom = 3;
+      else if (diff > 5) newZoom = 4;
+      else if (diff > 2) newZoom = 5;
+      else if (diff > 1) newZoom = 6;
+      else if (diff > 0.5) newZoom = 8;
+      else if (diff > 0.1) newZoom = 10;
+      else newZoom = 12;
+      
+      setZoom(newZoom);
+      setHasInitialized(true);
     }
-  }, [items]);
+  }, [validPoints.length, hasInitialized]);
+
+  // Reset initialization when items completely change (e.g., new sheet loaded)
+  useEffect(() => {
+    setHasInitialized(false);
+  }, [items.length]);
 
   return (
     <div ref={containerRef} className="relative w-full h-[calc(100vh-140px)] bg-slate-100 rounded-xl overflow-hidden shadow-inner">
       <Map 
         height={containerHeight}
         center={center} 
-        zoom={zoom} 
+        zoom={zoom}
+        minZoom={1}
+        maxZoom={18}
         onBoundsChanged={({ center, zoom }) => { 
           setCenter(center); 
           setZoom(zoom); 
@@ -363,6 +382,40 @@ const MapView = ({ items, onSelect }) => {
             </Overlay>
         )}
       </Map>
+
+      {/* Fit All button */}
+      {validPoints.length > 0 && (
+        <button
+          onClick={() => {
+            const lats = validPoints.map(p => p.lat);
+            const lngs = validPoints.map(p => p.lng);
+            const minLat = Math.min(...lats);
+            const maxLat = Math.max(...lats);
+            const minLng = Math.min(...lngs);
+            const maxLng = Math.max(...lngs);
+            
+            setCenter([(minLat + maxLat) / 2, (minLng + maxLng) / 2]);
+            
+            const diff = Math.max(maxLat - minLat, maxLng - minLng);
+            let newZoom;
+            if (diff > 20) newZoom = 2;
+            else if (diff > 10) newZoom = 3;
+            else if (diff > 5) newZoom = 4;
+            else if (diff > 2) newZoom = 5;
+            else if (diff > 1) newZoom = 6;
+            else if (diff > 0.5) newZoom = 8;
+            else if (diff > 0.1) newZoom = 10;
+            else newZoom = 12;
+            
+            setZoom(newZoom);
+            setPopup(null);
+          }}
+          className="absolute bottom-4 right-4 bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 z-20"
+        >
+          <MapIcon size={16} />
+          Fit All
+        </button>
+      )}
 
       {validPoints.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-100/80 pointer-events-none">
