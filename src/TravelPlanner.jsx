@@ -377,6 +377,7 @@ export default function TravelApp() {
       const savedUrl = localStorage.getItem('travel_sheet_url');
       if (savedUrl) {
         setSheetUrl(savedUrl);
+        // Load saved visited state for the saved URL
         const savedVisited = localStorage.getItem(`visited_${savedUrl}`);
         if (savedVisited) setVisited(JSON.parse(savedVisited));
       }
@@ -434,6 +435,10 @@ export default function TravelApp() {
     setLoading(true);
     setError(null);
     setDebugLog('');
+    
+    // Clear items immediately to show we're loading fresh data
+    setItems([]);
+    setSelectedItem(null);
     
     const processedUrl = processUrl(urlToFetch, forceCSV);
     setDebugLog(prev => prev + `Requesting: ${processedUrl}\n`);
@@ -542,8 +547,14 @@ export default function TravelApp() {
       setAppState('VIEW');
       localStorage.setItem('travel_sheet_url', urlToFetch);
       
+      // Load saved visited state for this specific URL
       const savedVisited = localStorage.getItem(`visited_${urlToFetch}`);
-      if (savedVisited) setVisited(JSON.parse(savedVisited));
+      if (savedVisited) {
+        setVisited(JSON.parse(savedVisited));
+      } else {
+        // Clear visited state if this is a new URL
+        setVisited({});
+      }
 
     } catch (err) {
       console.error(err);
