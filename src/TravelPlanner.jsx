@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Map, Marker, Overlay } from 'pigeon-maps';
 import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown, Filter, CheckSquare, Square, Map as MapIcon, List, Image as ImageIcon, Trash2, FolderOpen } from 'lucide-react';
 
 // PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE
@@ -205,11 +206,40 @@ const extractLocationData = (url) => {
 };
 
 // --- COMPONENT: Interactive Map View ---
+const RouteLines = ({ latLngToPixel, width, height, points, colors }) => {
+  if (!points || points.length < 2 || !latLngToPixel) return null;
+  
+  return (
+      <svg width={width} height={height} style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}>
+          {points.map((p, i) => {
+              if (i === points.length - 1) return null;
+              const nextP = points[i+1];
+              const [x1, y1] = latLngToPixel([p.lat, p.lng]);
+              const [x2, y2] = latLngToPixel([nextP.lat, nextP.lng]);
+              
+              return (
+                  <line 
+                      key={i}
+                      x1={x1} y1={y1}
+                      x2={x2} y2={y2}
+                      stroke={colors[i % colors.length]}
+                      strokeWidth={3}
+                      strokeDasharray="6, 6"
+                      strokeLinecap="round"
+                      opacity={0.6}
+                  />
+              );
+          })}
+      </svg>
+  );
+};
+
 const MapView = ({ items, onSelect }) => {
-  const mapContainer = useRef(null);
-  const mapInstance = useRef(null);
-  const markersRef = useRef([]);
-  const polylinesRef = useRef([]);
+  const [center, setCenter] = useState([13.7563, 100.5018]);
+  const [zoom, setZoom] = useState(6);
+  const [popup, setPopup] = useState(null);
+  const [containerHeight, setContainerHeight] = useState(600);
+  const containerRef = useRef(null);
 
   // Colors for route segments
   const routeColors = [
@@ -223,192 +253,122 @@ const MapView = ({ items, onSelect }) => {
     '#6366f1', // indigo
   ];
 
+  const validPoints = items.filter(i => i.coords && !i.isHeader).map(item => ({
+    ...item,
+    lat: parseFloat(item.coords.lat),
+    lng: parseFloat(item.coords.lng)
+  })).filter(i => !isNaN(i.lat) && !isNaN(i.lng));
+
   useEffect(() => {
-    let isMounted = true;
-
-    const loadLeaflet = async () => {
-      // Load CSS
-      if (!document.getElementById('leaflet-css')) {
-        const link = document.createElement('link');
-        link.id = 'leaflet-css';
-        link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-        document.head.appendChild(link);
-      }
-
-      // Load JS
-      if (!window.L) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement('script');
-          script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-          script.onload = resolve;
-          script.onerror = reject;
-          document.head.appendChild(script);
-        });
-      }
-
-      if (isMounted) {
-        initializeMap();
+    const updateHeight = () => {
+      if (containerRef.current) {
+        setContainerHeight(containerRef.current.clientHeight);
       }
     };
-
-    const initializeMap = () => {
-      if (!mapContainer.current || !window.L) return;
-
-      // Clean up existing map
-      if (mapInstance.current) {
-        mapInstance.current.remove();
-        mapInstance.current = null;
-      }
-
-      const L = window.L;
-      const map = L.map(mapContainer.current, {
-        zoomControl: true,
-        scrollWheelZoom: true
-      });
-      mapInstance.current = map;
-
-      // Add Tile Layer (OpenStreetMap via CARTO)
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 19
-      }).addTo(map);
-
-      // Filter valid coordinates (exclude headers)
-      const validPoints = items.filter(i => i.coords && !i.isHeader);
-      
-      if (validPoints.length === 0) {
-        map.setView([13.7563, 100.5018], 6); // Default to Thailand
-        return;
-      }
-
-      const latLngs = [];
-      markersRef.current = [];
-      polylinesRef.current = [];
-
-      // Add markers for each location
-      validPoints.forEach((item, idx) => {
-        const lat = parseFloat(item.coords.lat);
-        const lng = parseFloat(item.coords.lng);
-        
-        if (isNaN(lat) || isNaN(lng)) return;
-        
-        latLngs.push([lat, lng]);
-
-        const styles = getTypeStyles(item.type);
-
-        // Custom numbered marker
-        const iconHtml = `
-          <div style="
-            background-color: ${styles.bg};
-            color: ${styles.pin};
-            border: 3px solid ${styles.pin};
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            font-size: 14px;
-            box-shadow: 0 3px 8px rgba(0,0,0,0.3);
-            font-family: system-ui, sans-serif;
-          ">${idx + 1}</div>
-        `;
-
-        const customIcon = L.divIcon({
-          html: iconHtml,
-          className: 'leaflet-custom-pin',
-          iconSize: [32, 32],
-          iconAnchor: [16, 16],
-          popupAnchor: [0, -16]
-        });
-
-        const marker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
-        markersRef.current.push(marker);
-        
-        // Popup with location info
-        const popupContent = `
-          <div style="font-family: system-ui, sans-serif; min-width: 180px; padding: 4px;">
-            <div style="font-weight: 700; font-size: 14px; color: #1e293b; margin-bottom: 4px;">${item.name}</div>
-            ${item.shortInfo ? `<div style="color: #64748b; font-size: 12px; line-height: 1.4;">${item.shortInfo}</div>` : ''}
-            ${item.type ? `<div style="margin-top: 6px;"><span style="background: ${styles.bg}; color: ${styles.pin}; padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600; text-transform: uppercase;">${item.type}</span></div>` : ''}
-          </div>
-        `;
-        
-        marker.bindPopup(popupContent, { maxWidth: 250 });
-        marker.on('click', () => {
-          onSelect(item);
-        });
-      });
-
-      // Draw colored route segments between consecutive points
-      if (latLngs.length > 1) {
-        for (let i = 0; i < latLngs.length - 1; i++) {
-          const segmentColor = routeColors[i % routeColors.length];
-          const polyline = L.polyline([latLngs[i], latLngs[i + 1]], {
-            color: segmentColor,
-            weight: 4,
-            opacity: 0.7,
-            dashArray: '8, 12',
-            lineCap: 'round'
-          }).addTo(map);
-          polylinesRef.current.push(polyline);
-        }
-      }
-
-      // Fit map bounds to show all markers with padding
-      if (latLngs.length > 0) {
-        const bounds = L.latLngBounds(latLngs);
-        map.fitBounds(bounds, { 
-          padding: [50, 50],
-          maxZoom: 14
-        });
-      }
-    };
-
-    loadLeaflet();
-
-    return () => {
-      isMounted = false;
-      if (mapInstance.current) {
-        mapInstance.current.remove();
-        mapInstance.current = null;
-      }
-    };
-  }, [items, onSelect]);
-
-  // Add custom CSS for markers
-  useEffect(() => {
-    if (!document.getElementById('leaflet-custom-styles')) {
-      const style = document.createElement('style');
-      style.id = 'leaflet-custom-styles';
-      style.textContent = `
-        .leaflet-custom-pin {
-          background: transparent !important;
-          border: none !important;
-        }
-        .leaflet-popup-content-wrapper {
-          border-radius: 12px;
-          box-shadow: 0 4px 15px rgba(0,0,0,0.15);
-        }
-        .leaflet-popup-content {
-          margin: 10px 12px;
-        }
-      `;
-      document.head.appendChild(style);
-    }
+    
+    updateHeight();
+    window.addEventListener('resize', updateHeight);
+    return () => window.removeEventListener('resize', updateHeight);
   }, []);
 
+  useEffect(() => {
+    if (validPoints.length > 0) {
+      const lats = validPoints.map(p => p.lat);
+      const lngs = validPoints.map(p => p.lng);
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      const minLng = Math.min(...lngs);
+      const maxLng = Math.max(...lngs);
+      
+      setCenter([(minLat + maxLat) / 2, (minLng + maxLng) / 2]);
+      
+      // Rough zoom calculation
+      const diff = Math.max(maxLat - minLat, maxLng - minLng);
+      if (diff > 10) setZoom(4);
+      else if (diff > 5) setZoom(6);
+      else if (diff > 1) setZoom(8);
+      else if (diff > 0.5) setZoom(10);
+      else setZoom(12);
+    }
+  }, [items]);
+
   return (
-    <div className="relative w-full h-[calc(100vh-140px)] bg-slate-100 rounded-xl overflow-hidden shadow-inner">
-      <div ref={mapContainer} className="w-full h-full" />
-      {items.filter(i => i.coords && !i.isHeader).length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-100/80">
+    <div ref={containerRef} className="relative w-full h-[calc(100vh-140px)] bg-slate-100 rounded-xl overflow-hidden shadow-inner">
+      <Map 
+        height={containerHeight}
+        center={center} 
+        zoom={zoom} 
+        onBoundsChanged={({ center, zoom }) => { 
+          setCenter(center); 
+          setZoom(zoom); 
+        }}
+      >
+        <RouteLines points={validPoints} colors={routeColors} />
+
+        {validPoints.map((item, idx) => {
+          const styles = getTypeStyles(item.type);
+          return (
+            <Overlay key={idx} anchor={[item.lat, item.lng]} offset={[0, 0]}>
+                <div 
+                    className="flex items-center justify-center rounded-full shadow-md transition-transform hover:scale-110 cursor-pointer relative z-10"
+                    style={{
+                        backgroundColor: styles.bg,
+                        color: styles.pin,
+                        border: `3px solid ${styles.pin}`,
+                        width: '32px',
+                        height: '32px',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        fontFamily: 'system-ui, sans-serif',
+                        transform: 'translate(-50%, -50%)'
+                    }}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        setPopup({ item, anchor: [item.lat, item.lng] });
+                    }}
+                >
+                    {idx + 1}
+                </div>
+            </Overlay>
+          );
+        })}
+
+        {popup && (
+            <Overlay anchor={popup.anchor} offset={[0, -50]}>
+                <div className="bg-white p-3 rounded-xl shadow-xl border border-slate-100 min-w-[200px] relative z-50 animate-in fade-in zoom-in duration-200">
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); setPopup(null); }}
+                        className="absolute top-1 right-1 text-slate-400 hover:text-slate-600"
+                    >
+                        <X size={14} />
+                    </button>
+                    <div className="font-bold text-slate-800 text-sm mb-1 pr-4">{popup.item.name}</div>
+                    {popup.item.shortInfo && <div className="text-xs text-slate-500 mb-2 leading-tight">{popup.item.shortInfo}</div>}
+                    <div className="flex justify-between items-center mt-2">
+                        {popup.item.type && (
+                            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                                {popup.item.type}
+                            </span>
+                        )}
+                        <button 
+                            onClick={() => onSelect(popup.item)}
+                            className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100 font-medium"
+                        >
+                            Details
+                        </button>
+                    </div>
+                    {/* Triangle pointer */}
+                    <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-4 h-4 bg-white rotate-45 border-b border-r border-slate-100"></div>
+                </div>
+            </Overlay>
+        )}
+      </Map>
+
+      {validPoints.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-100/80 pointer-events-none">
           <div className="text-center text-slate-500">
             <MapIcon size={48} className="mx-auto mb-2 opacity-50" />
-            <p>No locations with coordinates found</p>
+            <p>No locations with coordinates found.</p>
           </div>
         </div>
       )}
