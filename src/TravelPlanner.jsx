@@ -446,16 +446,30 @@ export default function TravelApp() {
   };
 
   const fetchWithProxy = async (url) => {
-    try {
-      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-      const response = await fetch(proxyUrl);
-      if (response.ok) return { text: await response.text(), source: 'corsproxy' };
-    } catch (e) { console.warn("CorsProxy failed", e); }
+    // Try multiple CORS proxies
+    const proxies = [
+      (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+      (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}&t=${Date.now()}`,
+      (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+    ];
 
-    const proxyUrl2 = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}&t=${Date.now()}`;
-    const response = await fetch(proxyUrl2);
-    if (!response.ok) throw new Error(`Proxy Fetch Failed: ${response.status}`);
-    return { text: await response.text(), source: 'allorigins' };
+    for (const proxyFn of proxies) {
+      try {
+        const proxyUrl = proxyFn(url);
+        const response = await fetch(proxyUrl);
+        if (response.ok) {
+          const text = await response.text();
+          // Check if we got actual data (not a redirect page or error)
+          if (text && !text.includes('Temporary Redirect') && !text.includes('moved temporarily')) {
+            return { text, source: proxyUrl.split('/')[2] };
+          }
+        }
+      } catch (e) { 
+        console.warn("Proxy failed", e); 
+      }
+    }
+    
+    throw new Error('All proxy methods failed');
   };
 
   const fetchData = async (urlToFetch, forceCSV = false) => {
@@ -492,25 +506,49 @@ export default function TravelApp() {
         }
       }
 
-      if (text.trim().toLowerCase().startsWith('<!doctype html') || text.includes('<html')) {
+      if (text.trim().toLowerCase().startsWith('<!doctype html') || text.trim().toLowerCase().startsWith('<html')) {
         isHTML = true;
+        
+        // Check if it's a Google redirect/error page (not actual data)
+        if (text.includes('Temporary Redirect') || text.includes('moved temporarily') || 
+            text.includes('Sign in') || text.includes('accounts.google.com')) {
+          setDebugLog(prev => prev + `Received Google redirect/auth page. Trying alternative method...\n`);
+          // Try fetching with pub format
+          const pubUrl = urlToFetch.replace(/\/edit.*$/, '/pub?output=csv&gid=0');
+          try {
+            const pubResult = await fetchWithProxy(pubUrl);
+            text = pubResult.text;
+            isHTML = text.trim().toLowerCase().startsWith('<!doctype html') || text.trim().toLowerCase().startsWith('<html');
+            setDebugLog(prev => prev + `Pub URL method: ${isHTML ? 'Still HTML' : 'Got CSV'}\n`);
+          } catch (pubErr) {
+            throw new Error('Spreadsheet may not be publicly shared. Please ensure "Anyone with the link" can view it.');
+          }
+        }
       }
 
       let headers = [];
       let rawRows = [];
 
       if (isHTML) {
-        if (forceCSV) throw new Error('Received HTML but expected CSV.');
+        if (forceCSV) throw new Error('Received HTML but expected CSV. The spreadsheet may not be publicly shared.');
+        setDebugLog(prev => prev + `Parsing as HTML table...\n`);
         const result = parseHTML(text);
         headers = result?.headers || [];
         rawRows = result?.rows || [];
+        setDebugLog(prev => prev + `Found ${headers.length} columns, ${rawRows.length} rows\n`);
       } else {
+        setDebugLog(prev => prev + `Parsing as CSV...\n`);
         const result = parseCSV(text);
         headers = result?.headers || [];
         rawRows = result?.rows || [];
+        setDebugLog(prev => prev + `Found ${headers.length} columns, ${rawRows.length} rows\n`);
       }
 
-      if (!headers || headers.length === 0) throw new Error(`Connected successfully, but found no data rows.`);
+      if (!headers || headers.length === 0) {
+        setDebugLog(prev => prev + `Headers found: ${JSON.stringify(headers)}\n`);
+        setDebugLog(prev => prev + `First 200 chars of response: ${text.substring(0, 200)}\n`);
+        throw new Error(`Connected successfully, but found no data rows. Make sure the spreadsheet is publicly shared.`);
+      }
 
       const mapIdx = {
         name: headers.findIndex(h => h.includes('name') || h.includes('place') || h.includes('location')),
