@@ -24,6 +24,20 @@ const fixImageLink = (url) => {
     return newUrl;
   }
 
+  // Handle postimg.cc links - convert sharing page URLs to direct image URLs
+  if (newUrl.includes('postimg.cc')) {
+    // If it's already a direct image link (i.postimg.cc), return as-is
+    if (newUrl.includes('i.postimg.cc')) {
+      return newUrl;
+    }
+    // Convert postimg.cc sharing page to direct image link
+    // e.g., https://postimg.cc/ABC123 -> https://i.postimg.cc/ABC123/image.jpg
+    const postimgMatch = newUrl.match(/postimg\.cc\/([a-zA-Z0-9]+)/);
+    if (postimgMatch && postimgMatch[1]) {
+      return `https://i.postimg.cc/${postimgMatch[1]}/image.jpg`;
+    }
+  }
+
   return newUrl;
 };
 
@@ -194,126 +208,212 @@ const extractLocationData = (url) => {
 const MapView = ({ items, onSelect }) => {
   const mapContainer = useRef(null);
   const mapInstance = useRef(null);
+  const markersRef = useRef([]);
+  const polylinesRef = useRef([]);
+
+  // Colors for route segments
+  const routeColors = [
+    '#3b82f6', // blue
+    '#10b981', // emerald
+    '#f97316', // orange
+    '#8b5cf6', // violet
+    '#ec4899', // pink
+    '#14b8a6', // teal
+    '#f59e0b', // amber
+    '#6366f1', // indigo
+  ];
 
   useEffect(() => {
-    // 1. Load Leaflet from CDN if not present
-    if (!document.getElementById('leaflet-css')) {
-      const link = document.createElement('link');
-      link.id = 'leaflet-css';
-      link.rel = 'stylesheet';
-      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-      document.head.appendChild(link);
-    }
+    let isMounted = true;
 
-    if (!window.L) {
-      const script = document.createElement('script');
-      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-      script.onload = initMap;
-      document.head.appendChild(script);
-    } else {
-      initMap();
-    }
+    const loadLeaflet = async () => {
+      // Load CSS
+      if (!document.getElementById('leaflet-css')) {
+        const link = document.createElement('link');
+        link.id = 'leaflet-css';
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        document.head.appendChild(link);
+      }
+
+      // Load JS
+      if (!window.L) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+
+      if (isMounted) {
+        initializeMap();
+      }
+    };
+
+    const initializeMap = () => {
+      if (!mapContainer.current || !window.L) return;
+
+      // Clean up existing map
+      if (mapInstance.current) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+      }
+
+      const L = window.L;
+      const map = L.map(mapContainer.current, {
+        zoomControl: true,
+        scrollWheelZoom: true
+      });
+      mapInstance.current = map;
+
+      // Add Tile Layer (OpenStreetMap via CARTO)
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+      }).addTo(map);
+
+      // Filter valid coordinates (exclude headers)
+      const validPoints = items.filter(i => i.coords && !i.isHeader);
+      
+      if (validPoints.length === 0) {
+        map.setView([13.7563, 100.5018], 6); // Default to Thailand
+        return;
+      }
+
+      const latLngs = [];
+      markersRef.current = [];
+      polylinesRef.current = [];
+
+      // Add markers for each location
+      validPoints.forEach((item, idx) => {
+        const lat = parseFloat(item.coords.lat);
+        const lng = parseFloat(item.coords.lng);
+        
+        if (isNaN(lat) || isNaN(lng)) return;
+        
+        latLngs.push([lat, lng]);
+
+        const styles = getTypeStyles(item.type);
+
+        // Custom numbered marker
+        const iconHtml = `
+          <div style="
+            background-color: ${styles.bg};
+            color: ${styles.pin};
+            border: 3px solid ${styles.pin};
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+            font-family: system-ui, sans-serif;
+          ">${idx + 1}</div>
+        `;
+
+        const customIcon = L.divIcon({
+          html: iconHtml,
+          className: 'leaflet-custom-pin',
+          iconSize: [32, 32],
+          iconAnchor: [16, 16],
+          popupAnchor: [0, -16]
+        });
+
+        const marker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
+        markersRef.current.push(marker);
+        
+        // Popup with location info
+        const popupContent = `
+          <div style="font-family: system-ui, sans-serif; min-width: 180px; padding: 4px;">
+            <div style="font-weight: 700; font-size: 14px; color: #1e293b; margin-bottom: 4px;">${item.name}</div>
+            ${item.shortInfo ? `<div style="color: #64748b; font-size: 12px; line-height: 1.4;">${item.shortInfo}</div>` : ''}
+            ${item.type ? `<div style="margin-top: 6px;"><span style="background: ${styles.bg}; color: ${styles.pin}; padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600; text-transform: uppercase;">${item.type}</span></div>` : ''}
+          </div>
+        `;
+        
+        marker.bindPopup(popupContent, { maxWidth: 250 });
+        marker.on('click', () => {
+          onSelect(item);
+        });
+      });
+
+      // Draw colored route segments between consecutive points
+      if (latLngs.length > 1) {
+        for (let i = 0; i < latLngs.length - 1; i++) {
+          const segmentColor = routeColors[i % routeColors.length];
+          const polyline = L.polyline([latLngs[i], latLngs[i + 1]], {
+            color: segmentColor,
+            weight: 4,
+            opacity: 0.7,
+            dashArray: '8, 12',
+            lineCap: 'round'
+          }).addTo(map);
+          polylinesRef.current.push(polyline);
+        }
+      }
+
+      // Fit map bounds to show all markers with padding
+      if (latLngs.length > 0) {
+        const bounds = L.latLngBounds(latLngs);
+        map.fitBounds(bounds, { 
+          padding: [50, 50],
+          maxZoom: 14
+        });
+      }
+    };
+
+    loadLeaflet();
 
     return () => {
+      isMounted = false;
       if (mapInstance.current) {
         mapInstance.current.remove();
         mapInstance.current = null;
       }
     };
+  }, [items, onSelect]);
+
+  // Add custom CSS for markers
+  useEffect(() => {
+    if (!document.getElementById('leaflet-custom-styles')) {
+      const style = document.createElement('style');
+      style.id = 'leaflet-custom-styles';
+      style.textContent = `
+        .leaflet-custom-pin {
+          background: transparent !important;
+          border: none !important;
+        }
+        .leaflet-popup-content-wrapper {
+          border-radius: 12px;
+          box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+        }
+        .leaflet-popup-content {
+          margin: 10px 12px;
+        }
+      `;
+      document.head.appendChild(style);
+    }
   }, []);
 
-  const initMap = () => {
-    if (mapInstance.current || !mapContainer.current || !window.L) return;
-
-    const L = window.L;
-    const map = L.map(mapContainer.current);
-    mapInstance.current = map;
-
-    // Add Tile Layer (OpenStreetMap)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      subdomains: 'abcd',
-      maxZoom: 20
-    }).addTo(map);
-
-    // Filter valid coordinates
-    const validPoints = items.filter(i => i.coords && !i.isHeader);
-    const latLngs = [];
-
-    validPoints.forEach((item, idx) => {
-      const { lat, lng } = item.coords;
-      latLngs.push([lat, lng]);
-
-      const styles = getTypeStyles(item.type);
-
-      // Custom HTML Icon
-      const iconHtml = `
-        <div style="
-          background-color: ${styles.bg};
-          color: ${styles.pin};
-          border: 2px solid ${styles.pin};
-          width: 30px;
-          height: 30px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-weight: bold;
-          font-size: 14px;
-          box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-        ">${idx + 1}</div>
-      `;
-
-      const customIcon = L.divIcon({
-        html: iconHtml,
-        className: 'custom-pin', // dummy class to prevent default styles
-        iconSize: [30, 30],
-        iconAnchor: [15, 15],
-        popupAnchor: [0, -15]
-      });
-
-      const marker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
-      
-      // Popup Content
-      const popupContent = `
-        <div style="font-family: sans-serif; min-width: 150px;">
-          <h3 style="margin:0; font-weight:bold; font-size:14px; color:#1e293b">${item.name}</h3>
-          ${item.shortInfo ? `<p style="margin:4px 0; color:#64748b; font-size:12px;">${item.shortInfo}</p>` : ''}
+  return (
+    <div className="relative w-full h-[calc(100vh-140px)] bg-slate-100 rounded-xl overflow-hidden shadow-inner">
+      <div ref={mapContainer} className="w-full h-full" />
+      {items.filter(i => i.coords && !i.isHeader).length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-100/80">
+          <div className="text-center text-slate-500">
+            <MapIcon size={48} className="mx-auto mb-2 opacity-50" />
+            <p>No locations with coordinates found</p>
+          </div>
         </div>
-      `;
-      
-      marker.bindPopup(popupContent);
-      marker.on('click', () => onSelect(item));
-    });
-
-    // Draw Route Line
-    if (latLngs.length > 1) {
-      L.polyline(latLngs, {
-        color: '#3b82f6',
-        weight: 3,
-        opacity: 0.6,
-        dashArray: '5, 10'
-      }).addTo(map);
-    }
-
-    // Fit Bounds
-    if (latLngs.length > 0) {
-      map.fitBounds(L.latLngBounds(latLngs).pad(0.2));
-    } else {
-      map.setView([0, 0], 2);
-    }
-  };
-
-  // Update markers if items change (basic implementation re-inits)
-  useEffect(() => {
-    if (mapInstance.current && window.L) {
-        mapInstance.current.remove();
-        mapInstance.current = null;
-        initMap();
-    }
-  }, [items]);
-
-  return <div ref={mapContainer} className="w-full h-[calc(100vh-140px)] bg-slate-100 rounded-xl overflow-hidden shadow-inner" />;
+      )}
+    </div>
+  );
 };
 
 export default function TravelApp() {
@@ -706,6 +806,7 @@ export default function TravelApp() {
               src={hoveredItem.photo} 
               alt={hoveredItem.name}
               className="w-full h-full object-cover"
+              referrerPolicy="no-referrer"
               onError={(e) => e.target.style.display = 'none'}
             />
         </div>
@@ -961,6 +1062,7 @@ export default function TravelApp() {
                                     src={item.photo} 
                                     alt={item.name} 
                                     className={`w-full h-full object-cover ${visited[item.id] ? 'grayscale' : ''}`}
+                                    referrerPolicy="no-referrer"
                                     onError={(e) => { 
                                     e.target.style.display = 'none'; 
                                     e.target.parentNode.innerHTML = `<div class="w-full h-full flex items-center justify-center bg-gray-100 text-xs text-gray-400 text-center p-1">No Img</div>`;
@@ -1059,6 +1161,8 @@ export default function TravelApp() {
                                   src={img} 
                                   alt={`${selectedItem.name} ${i+1}`}
                                   className="w-full h-full object-cover"
+                                  referrerPolicy="no-referrer"
+                                  crossOrigin="anonymous"
                                   onError={(e) => {
                                     e.target.onerror = null; 
                                     e.target.src = 'https://placehold.co/600x400?text=Image+Error';
