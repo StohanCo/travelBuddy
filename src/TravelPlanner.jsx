@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown, Filter, CheckSquare, Square, Map as MapIcon, List, Image as ImageIcon } from 'lucide-react';
+import { MapPin, Info, Navigation, X, Loader2, FileSpreadsheet, AlertCircle, RefreshCw, Share2, Check, Bug, Settings, Clock, ArrowDown, Filter, CheckSquare, Square, Map as MapIcon, List, Image as ImageIcon, Trash2, FolderOpen } from 'lucide-react';
 
 // PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE
 const LOGGING_URL = ""; 
@@ -333,6 +333,7 @@ export default function TravelApp() {
   const [visited, setVisited] = useState({});
   const [activeFilter, setActiveFilter] = useState('All');
   const [categories, setCategories] = useState([]);
+  const [savedPlans, setSavedPlans] = useState([]);
 
   // --- LOGGING SYSTEM ---
   useEffect(() => {
@@ -368,6 +369,12 @@ export default function TravelApp() {
   }, [appState]);
 
   useEffect(() => {
+    // Load saved plans from localStorage
+    const plans = localStorage.getItem('travel_saved_plans');
+    if (plans) {
+      setSavedPlans(JSON.parse(plans));
+    }
+    
     const params = new URLSearchParams(window.location.search);
     const urlFromParam = params.get('sheet');
     if (urlFromParam) {
@@ -567,6 +574,35 @@ export default function TravelApp() {
       setAppState('VIEW');
       localStorage.setItem('travel_sheet_url', urlToFetch);
       
+      // Save this plan to the list of saved plans
+      const planName = parsedItems.find(item => item.isHeader)?.name || 
+                       parsedItems[0]?.name || 
+                       'Unnamed Trip';
+      const locationCount = parsedItems.filter(item => !item.isHeader).length;
+      
+      const existingPlans = JSON.parse(localStorage.getItem('travel_saved_plans') || '[]');
+      const planIndex = existingPlans.findIndex(p => p.url === urlToFetch);
+      
+      const planData = {
+        url: urlToFetch,
+        name: planName,
+        locationCount: locationCount,
+        lastOpened: new Date().toISOString()
+      };
+      
+      if (planIndex > -1) {
+        // Update existing plan
+        existingPlans[planIndex] = planData;
+      } else {
+        // Add new plan
+        existingPlans.unshift(planData);
+      }
+      
+      // Keep only the last 10 plans
+      const trimmedPlans = existingPlans.slice(0, 10);
+      localStorage.setItem('travel_saved_plans', JSON.stringify(trimmedPlans));
+      setSavedPlans(trimmedPlans);
+      
       // Load saved visited state for this specific URL
       const savedVisited = localStorage.getItem(`visited_${urlToFetch}`);
       if (savedVisited) {
@@ -593,6 +629,19 @@ export default function TravelApp() {
     setSheetUrl('');
     setItems([]);
     setAppState('SETUP');
+  };
+
+  const deleteSavedPlan = (planUrl, e) => {
+    e.stopPropagation();
+    const updatedPlans = savedPlans.filter(p => p.url !== planUrl);
+    localStorage.setItem('travel_saved_plans', JSON.stringify(updatedPlans));
+    localStorage.removeItem(`visited_${planUrl}`);
+    setSavedPlans(updatedPlans);
+  };
+
+  const loadSavedPlan = (plan) => {
+    setSheetUrl(plan.url);
+    fetchData(plan.url);
   };
 
   const HoverCard = () => {
@@ -689,6 +738,43 @@ export default function TravelApp() {
                             {debugLog}
                         </pre>
                     </details>
+                </div>
+              </div>
+            )}
+
+            {/* Saved Plans Section */}
+            {savedPlans.length > 0 && (
+              <div className="mt-6 pt-6 border-t border-slate-200">
+                <div className="flex items-center gap-2 mb-3">
+                  <FolderOpen size={16} className="text-slate-400" />
+                  <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Recent Plans</h2>
+                </div>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {savedPlans.map((plan, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => loadSavedPlan(plan)}
+                      className="group flex items-center justify-between p-3 bg-slate-50 hover:bg-blue-50 rounded-lg cursor-pointer transition-colors border border-slate-100 hover:border-blue-200"
+                    >
+                      <div className="flex-grow min-w-0">
+                        <p className="font-medium text-slate-800 truncate group-hover:text-blue-700 transition-colors">
+                          {plan.name}
+                        </p>
+                        <p className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
+                          <span>{plan.locationCount} locations</span>
+                          <span>•</span>
+                          <span>{new Date(plan.lastOpened).toLocaleDateString()}</span>
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => deleteSavedPlan(plan.url, e)}
+                        className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors opacity-0 group-hover:opacity-100"
+                        title="Remove from list"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
